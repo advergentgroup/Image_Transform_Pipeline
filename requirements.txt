@@ -1,0 +1,9 @@
+flask>=3.0
+python-dotenv>=1.0
+replicate>=0.25
+Pillow>=10.0
+numpy>=1.26
+requests>=2.31
+# vtracer         # pip install vtracer  (Розробник 2)
+# cairosvg        # для конвертації SVG → PNG (Розробник 2)
+# celery[redis]   # для фінальної версії (черга 500 фото/день)
