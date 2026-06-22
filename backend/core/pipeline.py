@@ -16,7 +16,7 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
       2. Vectorize + gradient bg  → saved for Archive 1
       3. AI 3D Pixar transform    → saved for Archive 2
       4. Hivedetect check on both outputs
-    Then zips each archive.
+    Then zips output into a single archive.
     """
     job_manager.update_status(job_id, "processing")
 
@@ -59,8 +59,7 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             })
 
         # ── Zip both archives ──────────────────────────────────────────
-        _zip_folder(vector_dir, os.path.join(output_dir, "vector.zip"))
-        _zip_folder(threed_dir, os.path.join(output_dir, "3d.zip"))
+        _zip_output(vector_dir, threed_dir, os.path.join(output_dir, "output.zip"))
 
         job_manager.update_status(job_id, "done")
 
@@ -68,7 +67,9 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
         job_manager.set_error(job_id, str(e))
 
 
-def _zip_folder(folder_path: str, zip_path: str):
+def _zip_output(vector_dir: str, threed_dir: str, zip_path: str):
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fname in os.listdir(folder_path):
-            zf.write(os.path.join(folder_path, fname), arcname=fname)
+        for fname in os.listdir(vector_dir):
+            zf.write(os.path.join(vector_dir, fname), arcname=f"vector/{fname}")
+        for fname in os.listdir(threed_dir):
+            zf.write(os.path.join(threed_dir, fname), arcname=f"3d/{fname}")

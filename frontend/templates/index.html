@@ -1,82 +1,180 @@
-<!DOCTYPE html>
-<html lang="uk">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Image Transform</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
-</head>
-<body>
+{% extends "base.html" %}
 
-  <div class="app">
+{% block title %}Dashboard — ImageTransform{% endblock %}
 
-    <!-- HEADER -->
-    <header class="header">
-      <div class="logo">
-        <span class="logo-icon">✦</span>
-        <span class="logo-text">ImageTransform</span>
+{% block content %}
+
+<section class="hero">
+  <div class="hero-text">
+    <h1 class="hero-title">Transform your <span class="hero-accent">illustrations</span></h1>
+    <p class="hero-sub">Into vector and 3D Pixar-style assets.</p>
+  </div>
+  <div class="hero-art" aria-hidden="true">
+    <div class="hero-box">
+      <div class="hero-float hero-float-1"></div>
+      <div class="hero-float hero-float-2"></div>
+      <div class="hero-float hero-float-3"></div>
+    </div>
+  </div>
+</section>
+
+<section class="stats" id="statsSection">
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-purple">
+      <svg viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="3" stroke="currentColor" stroke-width="1.5"/><circle cx="7.5" cy="8" r="1.5" fill="currentColor"/><path d="M3 14l4-4 3 3 4-5 3 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="stat-body">
+      <span class="stat-label">Images Processed</span>
+      <div class="stat-row">
+        <span class="stat-value" id="statImages">—</span>
       </div>
-      <span class="badge">MVP v0.1</span>
-    </header>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-teal">
+      <svg viewBox="0 0 20 20" fill="none"><path d="M4 10l4 4 8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="stat-body">
+      <span class="stat-label">Successful Jobs</span>
+      <div class="stat-row">
+        <span class="stat-value" id="statSuccess">—</span>
+      </div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-red">
+      <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </div>
+    <div class="stat-body">
+      <span class="stat-label">Failed Jobs</span>
+      <div class="stat-row">
+        <span class="stat-value" id="statFailed">—</span>
+      </div>
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon stat-icon-cyan">
+      <svg viewBox="0 0 20 20" fill="none"><path d="M10 3l2 4 4.5.5-3.5 3 1 4.5L10 13l-4 2 1-4.5-3.5-3L8.5 7 10 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="stat-body">
+      <span class="stat-label">Avg Hive Score</span>
+      <div class="stat-row">
+        <span class="stat-value" id="statHive">—</span>
+      </div>
+    </div>
+  </div>
+</section>
 
-    <!-- MAIN -->
-    <main class="main">
+<section class="grid-2">
 
-      <!-- Upload Section -->
-      <section class="upload-section" id="uploadSection">
-        <h1 class="title">Transform your <em>illustrations</em></h1>
-        <p class="subtitle">Upload up to 10 PNG/JPG images. Get vector style + 3D Pixar style — both zipped and ready.</p>
+  <div class="card active-job" id="activeJobCard">
+    <div class="card-header">
+      <h2 class="card-title">Active Job</h2>
+      <div class="card-header-right hidden" id="activeJobHeader">
+        <span class="job-id" id="activeJobId">Job #0000</span>
+        <span class="status-badge status-processing" id="activeJobStatus">Processing</span>
+      </div>
+    </div>
 
-        <div class="dropzone" id="dropzone">
-          <div class="dropzone-inner">
-            <div class="dropzone-icon">⬆</div>
-            <p class="dropzone-label">Drop images here or <label for="fileInput" class="browse-link">browse</label></p>
-            <p class="dropzone-hint">JPG / PNG · Max 10 files</p>
-          </div>
-          <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png" hidden />
+    <div class="panel-empty hidden" id="activeJobEmpty">
+      <p>No job is running right now.</p>
+      <a href="/new-job" class="btn btn-primary btn-sm">Start New Job</a>
+    </div>
+
+    <div id="activeJobBody" class="hidden">
+      <div class="active-meta">
+        <span id="progressLabel">0 / 0 images</span>
+        <span class="active-meta-sep">·</span>
+        <span id="activeEta">ETA calculating…</span>
+        <span class="active-meta-right" id="activeProgressPct">0%</span>
+      </div>
+
+      <div class="progress-track">
+        <div class="progress-fill" id="progressBar" style="width: 0%"></div>
+      </div>
+
+      <div class="thumb-row" id="resultsGrid"></div>
+
+      <div class="step-current" id="stepCurrent">
+        <span class="step-current-icon">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="#8B5CF6" stroke-width="1.5"/><path d="M6 9l2 2 4-4" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        Current step: <strong id="stepCurrentLabel">Uniquifying</strong>
+      </div>
+
+      <div class="stepper" id="stepper">
+        <div class="step active">
+          <div class="step-dot step-dot-glow"></div>
+          <span class="step-label">Uniquifying</span>
         </div>
-
-        <!-- File list -->
-        <ul class="file-list" id="fileList"></ul>
-
-        <button class="btn-primary" id="processBtn" disabled>
-          <span class="btn-icon">⚡</span> Process Images
-        </button>
-
-        <p class="error-msg" id="errorMsg"></p>
-      </section>
-
-      <!-- Progress Section -->
-      <section class="progress-section hidden" id="progressSection">
-        <h2 class="section-title">Processing…</h2>
-        <div class="progress-bar-wrap">
-          <div class="progress-bar" id="progressBar"></div>
+        <div class="step-line"></div>
+        <div class="step">
+          <div class="step-dot"></div>
+          <span class="step-label">Vectorizing</span>
         </div>
-        <p class="progress-label" id="progressLabel">0 / 0 images done</p>
-
-        <!-- Results grid (fills as images complete) -->
-        <div class="results-grid" id="resultsGrid"></div>
-      </section>
-
-      <!-- Done Section -->
-      <section class="done-section hidden" id="doneSection">
-        <div class="done-icon">✓</div>
-        <h2 class="done-title">All done!</h2>
-        <p class="done-sub">Your archives are ready to download.</p>
-        <div class="download-row">
-          <a class="btn-download" id="dlVector" href="#" download>
-            <span>⬡</span> Vector Style <span class="dl-label">Archive 1</span>
-          </a>
-          <a class="btn-download btn-3d" id="dl3d" href="#" download>
-            <span>◈</span> 3D Pixar Style <span class="dl-label">Archive 2</span>
-          </a>
+        <div class="step-line"></div>
+        <div class="step">
+          <div class="step-dot"></div>
+          <span class="step-label">3D Transform</span>
         </div>
-        <button class="btn-reset" id="resetBtn">Process more images</button>
-      </section>
+        <div class="step-line"></div>
+        <div class="step">
+          <div class="step-dot"></div>
+          <span class="step-label">Hive Check</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step">
+          <div class="step-dot"></div>
+          <span class="step-label">Complete</span>
+        </div>
+      </div>
 
-    </main>
+      <div class="download-row hidden" id="doneSection">
+        <a class="btn btn-primary btn-sm" id="dlArchive" href="#" download>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Download Archive
+        </a>
+        <a href="/new-job" class="btn btn-ghost btn-sm">Process more</a>
+      </div>
+    </div>
   </div>
 
-  <script src="/static/js/app.js"></script>
-</body>
-</html>
+  <div class="card recent-jobs">
+    <div class="card-header">
+      <h2 class="card-title">Recent Jobs</h2>
+      <a href="/history" class="link-muted">View All</a>
+    </div>
+    <div class="panel-loading hidden" id="recentLoading">Loading…</div>
+    <ul class="job-list" id="recentJobsList"></ul>
+    <div class="panel-empty hidden" id="recentEmpty">
+      <p>No jobs yet.</p>
+    </div>
+  </div>
+
+</section>
+
+<section class="upload-section" id="uploadSection">
+  <div class="dropzone" id="dropzone">
+    <div class="dropzone-icon-wrap">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M16 6v14M10 12l6-6 6 6" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 22v2a2 2 0 002 2h16a2 2 0 002-2v-2" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/></svg>
+    </div>
+    <p class="dropzone-title">Start a new transformation</p>
+    <p class="dropzone-hint">Drag &amp; drop up to 10 JPG/PNG images, or use the buttons below</p>
+    <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png" hidden />
+    <ul class="file-list hidden" id="fileList"></ul>
+    <div class="dropzone-actions">
+      <a href="/new-job" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        New Job
+      </a>
+      <button class="btn btn-secondary" id="browseBtn" type="button">Browse Files</button>
+    </div>
+    <p class="error-msg" id="errorMsg"></p>
+  </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/app.js"></script>
+{% endblock %}

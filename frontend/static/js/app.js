@@ -1,206 +1,221 @@
-/* app.js — Image Transform MVP frontend */
+const dropzone          = document.getElementById("dropzone");
+const browseBtn         = document.getElementById("browseBtn");
+const errorMsg          = document.getElementById("errorMsg");
 
-const dropzone    = document.getElementById("dropzone");
-const fileInput   = document.getElementById("fileInput");
-const fileList    = document.getElementById("fileList");
-const processBtn  = document.getElementById("processBtn");
-const errorMsg    = document.getElementById("errorMsg");
+const progressBar       = document.getElementById("progressBar");
+const progressLabel     = document.getElementById("progressLabel");
+const activeProgressPct = document.getElementById("activeProgressPct");
+const activeEta         = document.getElementById("activeEta");
+const activeJobId       = document.getElementById("activeJobId");
+const activeJobStatus   = document.getElementById("activeJobStatus");
+const activeJobHeader   = document.getElementById("activeJobHeader");
+const activeJobBody     = document.getElementById("activeJobBody");
+const activeJobEmpty    = document.getElementById("activeJobEmpty");
+const resultsGrid       = document.getElementById("resultsGrid");
+const stepCurrent       = document.getElementById("stepCurrent");
+const stepCurrentLabel  = document.getElementById("stepCurrentLabel");
+const stepper           = document.getElementById("stepper");
+const doneSection       = document.getElementById("doneSection");
+const dlArchive         = document.getElementById("dlArchive");
 
-const uploadSection   = document.getElementById("uploadSection");
-const progressSection = document.getElementById("progressSection");
-const doneSection     = document.getElementById("doneSection");
+const recentJobsList    = document.getElementById("recentJobsList");
+const recentLoading     = document.getElementById("recentLoading");
+const recentEmpty       = document.getElementById("recentEmpty");
 
-const progressBar   = document.getElementById("progressBar");
-const progressLabel = document.getElementById("progressLabel");
-const resultsGrid   = document.getElementById("resultsGrid");
+const statImages        = document.getElementById("statImages");
+const statSuccess       = document.getElementById("statSuccess");
+const statFailed        = document.getElementById("statFailed");
+const statHive          = document.getElementById("statHive");
 
-const dlVector = document.getElementById("dlVector");
-const dl3d     = document.getElementById("dl3d");
-const resetBtn = document.getElementById("resetBtn");
+let pollingTimer = null;
+let jobStartTime = null;
 
-let selectedFiles = [];
-let pollingTimer  = null;
+if (browseBtn && dropzone) {
+  browseBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    window.location.href = "/new-job";
+  });
 
-// ── File selection ─────────────────────────────────────────────────────────
+  dropzone.addEventListener("click", e => {
+    if (e.target.closest(".btn") || e.target.closest("a") || e.target.closest(".file-list")) return;
+    window.location.href = "/new-job";
+  });
+}
 
-dropzone.addEventListener("click", () => fileInput.click());
-
-dropzone.addEventListener("dragover", e => {
-  e.preventDefault();
-  dropzone.classList.add("drag-over");
+document.addEventListener("jobs:changed", () => {
+  loadStats();
+  loadRecentJobs();
+  loadActiveJob();
 });
 
-dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+loadStats();
+loadRecentJobs();
+loadActiveJob();
 
-dropzone.addEventListener("drop", e => {
-  e.preventDefault();
-  dropzone.classList.remove("drag-over");
-  handleFiles([...e.dataTransfer.files]);
-});
-
-fileInput.addEventListener("change", () => handleFiles([...fileInput.files]));
-
-function handleFiles(files) {
-  errorMsg.textContent = "";
-
-  const valid = files.filter(f => /\.(jpe?g|png)$/i.test(f.name));
-
-  if (valid.length === 0) {
-    errorMsg.textContent = "Please upload JPG or PNG files.";
-    return;
+async function loadStats() {
+  try {
+    const data = await Jobs.fetchStats();
+    if (statImages) statImages.textContent = data.images_processed ?? 0;
+    if (statSuccess) statSuccess.textContent = data.successful_jobs ?? 0;
+    if (statFailed) statFailed.textContent = data.failed_jobs ?? 0;
+    if (statHive) {
+      statHive.textContent = data.avg_hive_score != null ? `${data.avg_hive_score}%` : "—";
+    }
+  } catch {
+    if (statImages) statImages.textContent = "—";
+    if (statSuccess) statSuccess.textContent = "—";
+    if (statFailed) statFailed.textContent = "—";
+    if (statHive) statHive.textContent = "—";
   }
-  if (valid.length > 10) {
-    errorMsg.textContent = "Maximum 10 files per upload.";
-    return;
-  }
-
-  selectedFiles = valid;
-  renderFileList();
-  processBtn.disabled = false;
 }
 
-function renderFileList() {
-  fileList.innerHTML = selectedFiles.map(f => `
-    <li class="file-item">
-      <span class="file-item-name">📄 ${f.name}</span>
-      <span class="file-item-size">${formatSize(f.size)}</span>
-    </li>
-  `).join("");
-}
+async function loadRecentJobs() {
+  if (!recentJobsList) return;
 
-function formatSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / 1024 / 1024).toFixed(1) + " MB";
-}
-
-// ── Upload & start pipeline ────────────────────────────────────────────────
-
-processBtn.addEventListener("click", async () => {
-  errorMsg.textContent = "";
-  processBtn.disabled = true;
-
-  const formData = new FormData();
-  selectedFiles.forEach(f => formData.append("images", f));
+  recentLoading?.classList.remove("hidden");
+  recentEmpty?.classList.add("hidden");
+  recentJobsList.innerHTML = "";
 
   try {
-    const res = await fetch("/api/upload", { method: "POST", body: formData });
-    const data = await res.json();
+    const jobs = await Jobs.fetchJobs();
+    const recent = jobs.slice(0, 5);
+    if (recent.length === 0) {
+      recentEmpty?.classList.remove("hidden");
+    } else {
+      recentJobsList.innerHTML = recent.map((job, i) => Jobs.renderRecentItem(job, i)).join("");
+    }
+  } catch {
+    recentEmpty?.classList.remove("hidden");
+  } finally {
+    recentLoading?.classList.add("hidden");
+  }
+}
 
-    if (!res.ok) {
-      showError(data.error || "Upload failed.");
-      processBtn.disabled = false;
+async function loadActiveJob() {
+  if (!activeJobBody || !activeJobEmpty) return;
+
+  try {
+    const jobs = await Jobs.fetchJobs();
+    const active = jobs.find(j => Jobs.isActive(j.status));
+
+    if (!active) {
+      stopPolling();
+      showActiveEmpty();
+      Jobs.updateSidebar(null, 0, 0, false);
       return;
     }
 
-    showProgress(data.job_id, data.file_count);
-
-  } catch (err) {
-    showError("Network error. Please try again.");
-    processBtn.disabled = false;
+    showActivePanel(active);
+    jobStartTime = Date.now();
+    startPolling(active.job_id, active.total);
+    await pollOnce(active.job_id, active.total);
+  } catch {
+    stopPolling();
+    showActiveEmpty();
+    Jobs.updateSidebar(null, 0, 0, false);
   }
-});
-
-// ── Progress polling ───────────────────────────────────────────────────────
-
-function showProgress(jobId, total) {
-  uploadSection.classList.add("hidden");
-  progressSection.classList.remove("hidden");
-  progressLabel.textContent = `0 / ${total} images done`;
-  progressBar.style.width = "0%";
-  resultsGrid.innerHTML = "";
-
-  pollingTimer = setInterval(() => pollStatus(jobId, total), 2000);
 }
 
-async function pollStatus(jobId, total) {
+function showActiveEmpty() {
+  activeJobEmpty?.classList.remove("hidden");
+  activeJobBody?.classList.add("hidden");
+  activeJobHeader?.classList.add("hidden");
+}
+
+function showActivePanel(job) {
+  activeJobEmpty?.classList.add("hidden");
+  activeJobBody?.classList.remove("hidden");
+  activeJobHeader?.classList.remove("hidden");
+  doneSection?.classList.add("hidden");
+  stepCurrent?.classList.remove("hidden");
+
+  if (activeJobId) activeJobId.textContent = "Job " + Jobs.shortId(job.job_id);
+  if (activeJobStatus) {
+    activeJobStatus.textContent = "Processing";
+    activeJobStatus.className = "status-badge status-processing";
+  }
+
+  updateProgressUI(job.progress || 0, job.total || 0);
+  Jobs.updateSidebar(job.job_id, job.progress || 0, job.total || 0, true);
+  Jobs.updateStepper(stepper, stepCurrentLabel, job.progress || 0, job.total || 0);
+
+  if (resultsGrid) {
+    resultsGrid.innerHTML = Jobs.renderResultThumbs(job.results, job.total);
+  }
+}
+
+function startPolling(jobId, total) {
+  stopPolling();
+  pollingTimer = setInterval(() => pollOnce(jobId, total), 2000);
+}
+
+function stopPolling() {
+  if (pollingTimer) {
+    clearInterval(pollingTimer);
+    pollingTimer = null;
+  }
+}
+
+async function pollOnce(jobId, total) {
   try {
-    const res  = await fetch(`/api/status/${jobId}`);
-    const data = await res.json();
+    const data = await Jobs.fetchStatus(jobId);
+    const t = data.total || total;
 
-    // Update progress bar
-    const pct = total > 0 ? Math.round((data.progress / total) * 100) : 0;
-    progressBar.style.width = pct + "%";
-    progressLabel.textContent = `${data.progress} / ${total} images done`;
+    updateProgressUI(data.progress, t);
 
-    // Render new result cards
-    renderResults(data.results);
+    if (resultsGrid) {
+      resultsGrid.innerHTML = Jobs.renderResultThumbs(data.results, t);
+    }
+
+    Jobs.updateStepper(stepper, stepCurrentLabel, data.progress, t);
+    Jobs.updateSidebar(jobId, data.progress, t, Jobs.isActive(data.status));
 
     if (data.status === "done") {
-      clearInterval(pollingTimer);
-      showDone(jobId);
+      stopPolling();
+      if (activeJobStatus) {
+        activeJobStatus.textContent = "Completed";
+        activeJobStatus.className = "status-badge status-done";
+      }
+      if (activeEta) activeEta.textContent = "Complete";
+      stepCurrent?.classList.add("hidden");
+      doneSection?.classList.remove("hidden");
+      if (dlArchive) dlArchive.href = `/api/download/${jobId}`;
+      Jobs.updateSidebar(null, 0, 0, false);
+      Jobs.notifyChanged();
     }
 
     if (data.status === "error") {
-      clearInterval(pollingTimer);
-      showError(data.error || "Processing failed.");
-      progressSection.classList.add("hidden");
-      uploadSection.classList.remove("hidden");
-      processBtn.disabled = false;
+      stopPolling();
+      if (activeJobStatus) {
+        activeJobStatus.textContent = "Error";
+        activeJobStatus.className = "status-badge status-error";
+      }
+      if (activeEta) activeEta.textContent = "Failed";
+      Jobs.updateSidebar(null, 0, 0, false);
+      Jobs.notifyChanged();
     }
-
   } catch {
-    // Network hiccup — keep polling
   }
 }
 
-function renderResults(results) {
-  resultsGrid.innerHTML = results.map(r => {
-    const vScore = r.hive_vector;
-    const dScore = r.hive_3d;
-    return `
-      <div class="result-card">
-        <span class="result-name">✓ ${r.filename}</span>
-        <div class="result-scores">
-          <span class="score-chip ${scoreClass(vScore)}" title="Vector — Hivedetect AI score">
-            ⬡ ${formatScore(vScore)}
-          </span>
-          <span class="score-chip ${scoreClass(dScore)}" title="3D — Hivedetect AI score">
-            ◈ ${formatScore(dScore)}
-          </span>
-        </div>
-      </div>
-    `;
-  }).join("");
+function updateProgressUI(progress, total) {
+  const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
+  if (progressBar) progressBar.style.width = pct + "%";
+  if (progressLabel) progressLabel.textContent = `${progress} / ${total} images`;
+  if (activeProgressPct) activeProgressPct.textContent = pct + "%";
+
+  if (progress < total && jobStartTime) {
+    const elapsed = (Date.now() - jobStartTime) / 1000;
+    const perItem = progress > 0 ? elapsed / progress : elapsed || 1;
+    const remaining = Math.max(0, Math.round((total - progress) * perItem));
+    const mins = Math.floor(remaining / 60);
+    const secs = remaining % 60;
+    if (activeEta) {
+      activeEta.textContent = progress === 0 ? "ETA calculating…" : `ETA ${mins}m ${secs}s`;
+    }
+  } else if (progress >= total && activeEta) {
+    activeEta.textContent = "Complete";
+  }
 }
 
-function scoreClass(score) {
-  if (score < 0)   return "score-warn";   // check failed
-  if (score <= 10) return "score-good";   // target
-  if (score <= 30) return "score-warn";
-  return "score-bad";
-}
-
-function formatScore(score) {
-  if (score < 0) return "N/A";
-  return score.toFixed(1) + "% AI";
-}
-
-// ── Done state ─────────────────────────────────────────────────────────────
-
-function showDone(jobId) {
-  progressSection.classList.add("hidden");
-  doneSection.classList.remove("hidden");
-  dlVector.href = `/api/download/${jobId}/vector`;
-  dl3d.href     = `/api/download/${jobId}/3d`;
-}
-
-// ── Reset ──────────────────────────────────────────────────────────────────
-
-resetBtn.addEventListener("click", () => {
-  selectedFiles = [];
-  fileList.innerHTML = "";
-  fileInput.value = "";
-  errorMsg.textContent = "";
-  processBtn.disabled = true;
-
-  doneSection.classList.add("hidden");
-  progressSection.classList.add("hidden");
-  uploadSection.classList.remove("hidden");
-});
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function showError(msg) {
-  errorMsg.textContent = msg;
-}
+window.addEventListener("beforeunload", stopPolling);
