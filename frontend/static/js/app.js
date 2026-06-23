@@ -1,5 +1,11 @@
 const dropzone          = document.getElementById("dropzone");
+const fileInput         = document.getElementById("fileInput");
+const fileList          = document.getElementById("fileList");
+const previewGrid       = document.getElementById("previewGrid");
+const processBtn        = document.getElementById("processBtn");
 const browseBtn         = document.getElementById("browseBtn");
+const clearBtn          = document.getElementById("clearBtn");
+const fileCounter       = document.getElementById("fileCounter");
 const errorMsg          = document.getElementById("errorMsg");
 
 const progressBar       = document.getElementById("progressBar");
@@ -26,26 +32,184 @@ const statImages        = document.getElementById("statImages");
 const statSuccess       = document.getElementById("statSuccess");
 const statFailed        = document.getElementById("statFailed");
 const statHive          = document.getElementById("statHive");
+const activeJobCard     = document.getElementById("activeJobCard");
 
 let pollingTimer = null;
 let jobStartTime = null;
+let selectedFiles = [];
+let previewUrls = [];
 
-if (browseBtn && dropzone) {
+function setUploadEnabled(enabled) {
+  if (browseBtn) browseBtn.disabled = !enabled;
+  if (clearBtn) clearBtn.disabled = !enabled;
+  if (processBtn) processBtn.disabled = !enabled || selectedFiles.length === 0;
+}
+
+function clearFiles() {
+  previewUrls.forEach(url => URL.revokeObjectURL(url));
+  previewUrls = [];
+  selectedFiles = [];
+  if (fileInput) fileInput.value = "";
+  if (fileList) {
+    fileList.innerHTML = "";
+    fileList.classList.add("hidden");
+  }
+  if (previewGrid) {
+    previewGrid.innerHTML = "";
+    previewGrid.classList.add("hidden");
+  }
+  clearBtn?.classList.add("hidden");
+  if (fileCounter) fileCounter.textContent = "0 / 10 files";
+  if (errorMsg) errorMsg.textContent = "";
+  setUploadEnabled(true);
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+}
+
+function handleFiles(files) {
+  if (!fileInput) return;
+  if (errorMsg) errorMsg.textContent = "";
+
+  const valid = files.filter(f => /\.(jpe?g|png)$/i.test(f.name));
+
+  if (valid.length === 0) {
+    if (errorMsg) errorMsg.textContent = "Please upload JPG or PNG files.";
+    return;
+  }
+  if (valid.length > 10) {
+    if (errorMsg) errorMsg.textContent = "Maximum 10 files per upload.";
+    return;
+  }
+
+  previewUrls.forEach(url => URL.revokeObjectURL(url));
+  previewUrls = [];
+  selectedFiles = valid;
+  renderSelectedFiles();
+  clearBtn?.classList.remove("hidden");
+  setUploadEnabled(true);
+}
+
+function renderSelectedFiles() {
+  if (fileCounter) fileCounter.textContent = `${selectedFiles.length} / 10 files`;
+
+  if (previewGrid) {
+    previewGrid.classList.remove("hidden");
+    previewGrid.innerHTML = selectedFiles.map(f => {
+      const url = URL.createObjectURL(f);
+      previewUrls.push(url);
+      return `
+        <div class="preview-item">
+          <img src="${url}" alt="${f.name}" />
+          <span class="preview-item-name">${f.name}</span>
+        </div>
+      `;
+    }).join("");
+  }
+
+  if (fileList) {
+    fileList.classList.remove("hidden");
+    fileList.innerHTML = selectedFiles.map(f => `
+      <li class="file-item">
+        <span class="file-item-name">${f.name}</span>
+        <span class="file-item-size">${formatSize(f.size)}</span>
+      </li>
+    `).join("");
+  }
+}
+
+function initUploadZone() {
+  if (!dropzone || !fileInput || !browseBtn) return;
+
   browseBtn.addEventListener("click", e => {
     e.stopPropagation();
-    window.location.href = "/new-job";
+    fileInput.click();
   });
 
   dropzone.addEventListener("click", e => {
-    if (e.target.closest(".btn") || e.target.closest("a") || e.target.closest(".file-list")) return;
-    window.location.href = "/new-job";
+    if (e.target.closest(".btn") || e.target.closest(".file-list") || e.target.closest(".preview-grid")) return;
+    fileInput.click();
+  });
+
+  dropzone.addEventListener("dragover", e => {
+    e.preventDefault();
+    dropzone.classList.add("drag-over");
+  });
+
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
+
+  dropzone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropzone.classList.remove("drag-over");
+    handleFiles([...e.dataTransfer.files]);
+  });
+
+  fileInput.addEventListener("change", () => handleFiles([...fileInput.files]));
+
+  clearBtn?.addEventListener("click", clearFiles);
+
+  processBtn?.addEventListener("click", async e => {
+    e.stopPropagation();
+    if (processBtn.disabled || selectedFiles.length === 0) return;
+
+    if (errorMsg) errorMsg.textContent = "";
+    setUploadEnabled(false);
+
+    const formData = new FormData();
+    selectedFiles.forEach(f => formData.append("images", f));
+
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (errorMsg) errorMsg.textContent = data.error || "Upload failed.";
+        setUploadEnabled(true);
+        return;
+      }
+
+      const fileNames = selectedFiles.map(f => f.name);
+      clearFiles();
+      startJobFromUpload(data.job_id, data.file_count, fileNames);
+    } catch {
+      if (errorMsg) errorMsg.textContent = "Network error. Please try again.";
+      setUploadEnabled(true);
+    }
   });
 }
+
+function startJobFromUpload(jobId, total, fileNames) {
+  Jobs.saveActiveJob(jobId, total);
+  jobStartTime = Date.now();
+  setUploadEnabled(false);
+
+  activeJobCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  showActivePanel({
+    job_id: jobId,
+    progress: 0,
+    total,
+    results: [],
+    files: fileNames,
+    status: "processing",
+  });
+
+  startPolling(jobId, total);
+  pollOnce(jobId, total);
+  Jobs.notifyChanged();
+}
+
+initUploadZone();
 
 document.addEventListener("jobs:changed", () => {
   loadStats();
   loadRecentJobs();
-  loadActiveJob();
+  if (!activeJobCard?.classList.contains("job-state-error")) {
+    loadActiveJob();
+  }
 });
 
 loadStats();
@@ -93,6 +257,7 @@ async function loadRecentJobs() {
 
 async function loadActiveJob() {
   if (!activeJobBody || !activeJobEmpty) return;
+  if (activeJobCard?.classList.contains("job-state-error")) return;
 
   try {
     const jobs = await Jobs.fetchJobs();
@@ -101,17 +266,21 @@ async function loadActiveJob() {
     if (!active) {
       stopPolling();
       showActiveEmpty();
+      setUploadEnabled(true);
       Jobs.updateSidebar(null, 0, 0, false);
       return;
     }
 
+    setUploadEnabled(false);
     showActivePanel(active);
+    Jobs.saveActiveJob(active.job_id, active.total);
     jobStartTime = Date.now();
     startPolling(active.job_id, active.total);
     await pollOnce(active.job_id, active.total);
   } catch {
     stopPolling();
     showActiveEmpty();
+    setUploadEnabled(true);
     Jobs.updateSidebar(null, 0, 0, false);
   }
 }
@@ -123,6 +292,7 @@ function showActiveEmpty() {
 }
 
 function showActivePanel(job) {
+  Jobs.resetProgressUI(activeJobCard);
   activeJobEmpty?.classList.add("hidden");
   activeJobBody?.classList.remove("hidden");
   activeJobHeader?.classList.remove("hidden");
@@ -140,7 +310,12 @@ function showActivePanel(job) {
   Jobs.updateStepper(stepper, stepCurrentLabel, job.progress || 0, job.total || 0);
 
   if (resultsGrid) {
-    resultsGrid.innerHTML = Jobs.renderResultThumbs(job.results, job.total);
+    resultsGrid.innerHTML = Jobs.renderResultThumbs(
+      job.results,
+      job.total,
+      job.job_id,
+      job.files
+    );
   }
 }
 
@@ -161,17 +336,32 @@ async function pollOnce(jobId, total) {
     const data = await Jobs.fetchStatus(jobId);
     const t = data.total || total;
 
-    updateProgressUI(data.progress, t);
-
-    if (resultsGrid) {
-      resultsGrid.innerHTML = Jobs.renderResultThumbs(data.results, t);
+    if (data.status === "error") {
+      stopPolling();
+      Jobs.clearActiveJob();
+      if (activeJobStatus) {
+        activeJobStatus.textContent = "Error";
+        activeJobStatus.className = "status-badge status-error";
+      }
+      Jobs.freezeProgressUI(activeJobCard, data.error || "Processing failed.");
+      setUploadEnabled(true);
+      Jobs.updateSidebar(null, 0, 0, false);
+      Jobs.notifyChanged();
+      return;
     }
-
-    Jobs.updateStepper(stepper, stepCurrentLabel, data.progress, t);
-    Jobs.updateSidebar(jobId, data.progress, t, Jobs.isActive(data.status));
 
     if (data.status === "done") {
       stopPolling();
+      Jobs.clearActiveJob();
+      updateProgressUI(data.progress, t);
+      if (resultsGrid) {
+        resultsGrid.innerHTML = Jobs.renderResultThumbs(
+          data.results,
+          t,
+          jobId,
+          data.files
+        );
+      }
       if (activeJobStatus) {
         activeJobStatus.textContent = "Completed";
         activeJobStatus.className = "status-badge status-done";
@@ -180,20 +370,25 @@ async function pollOnce(jobId, total) {
       stepCurrent?.classList.add("hidden");
       doneSection?.classList.remove("hidden");
       if (dlArchive) dlArchive.href = `/api/download/${jobId}`;
+      setUploadEnabled(true);
       Jobs.updateSidebar(null, 0, 0, false);
       Jobs.notifyChanged();
+      return;
     }
 
-    if (data.status === "error") {
-      stopPolling();
-      if (activeJobStatus) {
-        activeJobStatus.textContent = "Error";
-        activeJobStatus.className = "status-badge status-error";
-      }
-      if (activeEta) activeEta.textContent = "Failed";
-      Jobs.updateSidebar(null, 0, 0, false);
-      Jobs.notifyChanged();
+    updateProgressUI(data.progress, t);
+
+    if (resultsGrid) {
+      resultsGrid.innerHTML = Jobs.renderResultThumbs(
+        data.results,
+        t,
+        jobId,
+        data.files
+      );
     }
+
+    Jobs.updateStepper(stepper, stepCurrentLabel, data.progress, t);
+    Jobs.updateSidebar(jobId, data.progress, t, true);
   } catch {
   }
 }

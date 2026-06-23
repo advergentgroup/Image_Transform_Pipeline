@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, send_file, render_template, current_app
+from werkzeug.utils import secure_filename
 from backend.core.job_manager import JobManager
 from backend.core.pipeline import run_pipeline
 from backend.utils.validators import validate_files
@@ -48,6 +49,8 @@ def upload():
         f.save(path)
         saved_paths.append(path)
 
+    job_manager.set_files(job_id, [os.path.basename(p) for p in saved_paths])
+
     # Run pipeline in background thread (Celery in final version)
     app = current_app._get_current_object()
     thread = threading.Thread(
@@ -62,6 +65,7 @@ def upload():
 
 @api_bp.route("/api/jobs")
 def list_jobs():
+    job_manager.sync_all_files_from_disk(current_app.config["UPLOAD_FOLDER"])
     return jsonify({"jobs": job_manager.list_jobs()})
 
 
@@ -79,7 +83,30 @@ def status(job_id):
     job = job_manager.get_job(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
+
+    job_manager.sync_files_from_disk(job_id, current_app.config["UPLOAD_FOLDER"])
+    job = job_manager.get_job(job_id)
     return jsonify(job)
+
+
+@api_bp.route("/api/jobs/<job_id>/file/<path:filename>")
+def job_file(job_id, filename):
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    job_manager.sync_files_from_disk(job_id, current_app.config["UPLOAD_FOLDER"])
+    job = job_manager.get_job(job_id)
+
+    safe_name = secure_filename(os.path.basename(filename))
+    if not safe_name or safe_name not in job.get("files", []):
+        return jsonify({"error": "File not found"}), 404
+
+    path = os.path.join(current_app.config["UPLOAD_FOLDER"], job_id, safe_name)
+    if not os.path.isfile(path):
+        return jsonify({"error": "File not found"}), 404
+
+    return send_file(path)
 
 
 @api_bp.route("/api/download/<job_id>")

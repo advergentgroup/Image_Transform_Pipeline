@@ -22,6 +22,7 @@ const stepper        = document.getElementById("stepper");
 
 const doneSection    = document.getElementById("doneSection");
 const dlArchive      = document.getElementById("dlArchive");
+const retryJobBtn    = document.getElementById("retryJobBtn");
 
 const STEPS = ["Uniquifying", "Vectorizing", "3D Transform", "Hive Check", "Complete"];
 
@@ -30,6 +31,7 @@ let pollingTimer  = null;
 let jobStartTime  = null;
 let previewUrls   = [];
 let currentJobId  = null;
+let currentJobFiles = [];
 
 browseBtn.addEventListener("click", e => {
   e.stopPropagation();
@@ -59,6 +61,26 @@ fileInput.addEventListener("change", () => handleFiles([...fileInput.files]));
 clearBtn.addEventListener("click", () => {
   clearFiles();
 });
+
+if (retryJobBtn) {
+  retryJobBtn.addEventListener("click", () => {
+    stopPolling();
+    Jobs.clearActiveJob();
+    Jobs.resetProgressUI(progressCard);
+    progressCard.classList.add("hidden");
+    processBtn.disabled = false;
+    browseBtn.disabled = false;
+    clearBtn.disabled = false;
+    errorMsg.textContent = "";
+  });
+}
+
+function stopPolling() {
+  if (pollingTimer) {
+    clearInterval(pollingTimer);
+    pollingTimer = null;
+  }
+}
 
 function clearFiles() {
   previewUrls.forEach(url => URL.revokeObjectURL(url));
@@ -161,13 +183,22 @@ processBtn.addEventListener("click", async e => {
   }
 });
 
-function showProgress(jobId, total) {
+function showProgress(jobId, total, initial) {
   currentJobId = jobId;
-  jobStartTime = Date.now();
+  currentJobFiles = initial?.files?.length
+    ? initial.files
+    : selectedFiles.map(f => f.name);
+  const saved = Jobs.getActiveJob();
+  jobStartTime = saved?.startedAt || Date.now();
   const shortId = "#" + jobId.slice(0, 4).toUpperCase();
 
+  Jobs.saveActiveJob(jobId, total);
+  Jobs.resetProgressUI(progressCard);
   progressCard.classList.remove("hidden");
-  progressCard.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  if (!initial) {
+    progressCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   activeJobId.textContent = "Job " + shortId;
   activeJobStatus.textContent = "Processing";
@@ -175,11 +206,15 @@ function showProgress(jobId, total) {
   doneSection.classList.add("hidden");
   stepCurrent.classList.remove("hidden");
 
-  updateProgressUI(0, total);
-  resultsGrid.innerHTML = "";
-  updateStepper(0, total);
-  Jobs.updateSidebar(jobId, 0, total, true);
+  const progress = initial?.progress || 0;
+  const results = initial?.results || [];
 
+  updateProgressUI(progress, total);
+  renderResults(results, total, currentJobFiles);
+  updateStepper(progress, total);
+  Jobs.updateSidebar(jobId, progress, total, true);
+
+  stopPolling();
   pollingTimer = setInterval(() => pollStatus(jobId, total), 2000);
 }
 
@@ -254,48 +289,53 @@ async function pollStatus(jobId, total) {
     const res  = await fetch(`/api/status/${jobId}`);
     const data = await res.json();
 
-    updateProgressUI(data.progress, total);
-    renderResults(data.results, total);
-    updateStepper(data.progress, total);
+    if (data.status === "error") {
+      stopPolling();
+      showFailed(data.error || "Processing failed.");
+      Jobs.notifyChanged();
+      return;
+    }
 
     if (data.status === "done") {
-      clearInterval(pollingTimer);
+      stopPolling();
+      updateProgressUI(data.progress, total);
+      renderResults(data.results, total, data.files);
       showDone(jobId);
       Jobs.notifyChanged();
+      return;
     }
 
-    if (data.status === "error") {
-      clearInterval(pollingTimer);
-      activeJobStatus.textContent = "Error";
-      activeJobStatus.className = "status-badge status-error";
-      showError(data.error || "Processing failed.");
-      processBtn.disabled = false;
-      browseBtn.disabled = false;
-      clearBtn.disabled = false;
-      Jobs.updateSidebar(null, 0, 0, false);
-      Jobs.notifyChanged();
-    }
+    updateProgressUI(data.progress, total);
+    renderResults(data.results, total, data.files);
+    updateStepper(data.progress, total);
 
   } catch {
   }
 }
 
-function renderResults(results, total) {
-  if (!results || results.length === 0) return;
+function showFailed(message) {
+  Jobs.clearActiveJob();
+  activeJobStatus.textContent = "Error";
+  activeJobStatus.className = "status-badge status-error";
+  Jobs.freezeProgressUI(progressCard, message);
+  Jobs.updateSidebar(null, 0, 0, false);
+  processBtn.disabled = false;
+  browseBtn.disabled = false;
+  clearBtn.disabled = false;
+}
 
-  const remaining = Math.max(0, total - results.length);
-  const thumbs = results.map((r, i) =>
-    `<div class="thumb thumb-result" style="background:linear-gradient(135deg,hsl(${i * 47},70%,50%),hsl(${i * 47 + 30},60%,35%))" title="${r.filename}"></div>`
-  ).join("");
-
-  const more = remaining > 0
-    ? `<div class="thumb thumb-more">+${remaining}</div>`
-    : "";
-
-  resultsGrid.innerHTML = thumbs + more;
+function renderResults(results, total, files) {
+  if (!currentJobId || !resultsGrid) return;
+  resultsGrid.innerHTML = Jobs.renderResultThumbs(
+    results || [],
+    total,
+    currentJobId,
+    files || currentJobFiles
+  );
 }
 
 function showDone(jobId) {
+  Jobs.clearActiveJob();
   activeJobStatus.textContent = "Completed";
   activeJobStatus.className = "status-badge status-done";
   activeEta.textContent = "Complete";
@@ -309,3 +349,50 @@ function showDone(jobId) {
 function showError(msg) {
   errorMsg.textContent = msg;
 }
+
+async function resumeActiveJob() {
+  const saved = Jobs.getActiveJob();
+  if (!saved?.jobId || !progressCard) return;
+
+  try {
+    const data = await Jobs.fetchStatus(saved.jobId);
+    const total = data.total || saved.total;
+
+    if (data.status === "error") {
+      Jobs.clearActiveJob();
+      progressCard.classList.remove("hidden");
+      activeJobId.textContent = "Job " + Jobs.shortId(saved.jobId);
+      showFailed(data.error || "Processing failed.");
+      Jobs.notifyChanged();
+      return;
+    }
+
+    if (data.status === "done") {
+      Jobs.clearActiveJob();
+      progressCard.classList.remove("hidden");
+      activeJobId.textContent = "Job " + Jobs.shortId(saved.jobId);
+      updateProgressUI(data.progress, total);
+      renderResults(data.results, total, data.files);
+      showDone(saved.jobId);
+      return;
+    }
+
+    if (Jobs.isActive(data.status)) {
+      showProgress(saved.jobId, total, data);
+      pollStatus(saved.jobId, total);
+    } else {
+      Jobs.clearActiveJob();
+    }
+  } catch {
+    Jobs.clearActiveJob();
+  }
+}
+
+resumeActiveJob();
+
+if (new URLSearchParams(window.location.search).get("pick") === "1") {
+  history.replaceState(null, "", window.location.pathname);
+  requestAnimationFrame(() => fileInput.click());
+}
+
+window.addEventListener("beforeunload", stopPolling);

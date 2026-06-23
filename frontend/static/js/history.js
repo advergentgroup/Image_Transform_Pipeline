@@ -26,6 +26,9 @@ if (searchInput) {
 document.addEventListener("jobs:changed", loadJobs);
 
 loadJobs();
+Jobs.syncSidebarFromApi();
+setInterval(loadJobs, 4000);
+setInterval(() => Jobs.syncSidebarFromApi(), 4000);
 
 async function loadJobs() {
   if (!historyList) return;

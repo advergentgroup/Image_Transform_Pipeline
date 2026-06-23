@@ -61,7 +61,18 @@ window.Jobs = (() => {
     return `<span class="score-chip ${cls}">${score}% AI</span>`;
   }
 
-  function renderThumbs(index) {
+  function fileUrl(jobId, filename) {
+    return `/api/jobs/${jobId}/file/${encodeURIComponent(filename)}`;
+  }
+
+  function renderThumbs(job, index) {
+    const files = job.files || [];
+    if (job.job_id && files.length) {
+      return files.slice(0, 3).map(name =>
+        `<img class="jt jt-img" src="${fileUrl(job.job_id, name)}" alt="" loading="lazy" />`
+      ).join("");
+    }
+
     const a = THUMBS[index % THUMBS.length];
     const b = THUMBS[(index + 1) % THUMBS.length];
     const c = THUMBS[(index + 2) % THUMBS.length];
@@ -87,7 +98,7 @@ window.Jobs = (() => {
     const ui = uiStatus(job.status);
     return `<li class="history-row" data-job-id="${job.job_id}" data-status="${ui}">
       <div class="ht-col ht-job">
-        <div class="job-thumbs">${renderThumbs(index)}</div>
+        <div class="job-thumbs">${renderThumbs(job, index)}</div>
         <div class="job-info"><span class="job-info-id">Job ${shortId(job.job_id)}</span></div>
       </div>
       <span class="ht-col ht-date">${formatDate(job.created_at)}</span>
@@ -101,7 +112,7 @@ window.Jobs = (() => {
   function renderRecentItem(job, index) {
     const badge = statusBadge(job.status);
     return `<li class="job-item" data-job-id="${job.job_id}" data-status="${uiStatus(job.status)}">
-      <div class="job-thumbs">${renderThumbs(index)}</div>
+      <div class="job-thumbs">${renderThumbs(job, index)}</div>
       <div class="job-info">
         <span class="job-info-id">Job ${shortId(job.job_id)}</span>
         <span class="job-info-time">${formatDate(job.created_at)}</span>
@@ -112,12 +123,25 @@ window.Jobs = (() => {
     </li>`;
   }
 
-  function renderResultThumbs(results, total) {
-    if (!results?.length) return "";
-    const remaining = Math.max(0, total - results.length);
-    const thumbs = results.map((r, i) =>
-      `<div class="thumb thumb-result" style="background:linear-gradient(135deg,hsl(${i * 47},70%,50%),hsl(${i * 47 + 30},60%,35%))" title="${r.filename || ""}"></div>`
-    ).join("");
+  function renderResultThumbs(results, total, jobId, files) {
+    if (!jobId) return "";
+
+    const pool = files?.length
+      ? files
+      : (results || []).map(r => r.filename).filter(Boolean);
+    if (!pool.length) return "";
+
+    const doneCount = results?.length || 0;
+    const maxVisible = 5;
+    const visible = pool.slice(0, maxVisible);
+
+    const thumbs = visible.map((name, i) => {
+      const done = i < doneCount;
+      const cls = done ? "thumb thumb-result" : "thumb thumb-pending";
+      return `<div class="${cls}" title="${name}"><img src="${fileUrl(jobId, name)}" alt="" loading="lazy" /></div>`;
+    }).join("");
+
+    const remaining = Math.max(0, (total || pool.length) - maxVisible);
     const more = remaining > 0 ? `<div class="thumb thumb-more">+${remaining}</div>` : "";
     return thumbs + more;
   }
@@ -206,6 +230,82 @@ window.Jobs = (() => {
     document.dispatchEvent(new CustomEvent("jobs:changed"));
   }
 
+  const ACTIVE_JOB_KEY = "itp_active_job";
+
+  function saveActiveJob(jobId, total) {
+    sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({
+      jobId,
+      total,
+      startedAt: Date.now(),
+    }));
+  }
+
+  function clearActiveJob() {
+    sessionStorage.removeItem(ACTIVE_JOB_KEY);
+  }
+
+  function getActiveJob() {
+    try {
+      const raw = sessionStorage.getItem(ACTIVE_JOB_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function freezeProgressUI(root, message) {
+    if (!root) return;
+
+    root.classList.add("job-state-error");
+    root.querySelector("#stepCurrent")?.classList.add("hidden");
+
+    const stepperEl = root.querySelector("#stepper");
+    if (stepperEl) {
+      stepperEl.querySelectorAll(".step").forEach(step => {
+        step.classList.remove("active", "done");
+        const dot = step.querySelector(".step-dot");
+        if (dot) {
+          dot.className = "step-dot";
+          dot.innerHTML = "";
+        }
+      });
+      stepperEl.querySelectorAll(".step-line").forEach(line => line.classList.remove("done"));
+    }
+
+    const eta = root.querySelector("#activeEta");
+    if (eta) eta.textContent = "Failed";
+
+    root.querySelector(".progress-fill")?.classList.add("progress-fill-error");
+
+    const text = root.querySelector("#jobErrorText");
+    if (text) text.textContent = message || "Processing failed.";
+    root.querySelector("#jobErrorPanel")?.classList.remove("hidden");
+  }
+
+  function resetProgressUI(root) {
+    if (!root) return;
+
+    root.classList.remove("job-state-error");
+    root.querySelector("#stepCurrent")?.classList.remove("hidden");
+    root.querySelector("#jobErrorPanel")?.classList.add("hidden");
+    root.querySelector(".progress-fill")?.classList.remove("progress-fill-error");
+  }
+
+  async function syncSidebarFromApi() {
+    if (!document.getElementById("sidebarJob")) return;
+
+    try {
+      const jobs = await fetchJobs();
+      const active = jobs.find(j => isActive(j.status));
+      if (active) {
+        updateSidebar(active.job_id, active.progress, active.total, true);
+      } else {
+        updateSidebar(null, 0, 0, false);
+      }
+    } catch {
+    }
+  }
+
   function isActive(status) {
     return status === "pending" || status === "processing";
   }
@@ -228,6 +328,16 @@ window.Jobs = (() => {
     fetchStats,
     fetchStatus,
     notifyChanged,
+    saveActiveJob,
+    clearActiveJob,
+    getActiveJob,
+    freezeProgressUI,
+    resetProgressUI,
+    syncSidebarFromApi,
     isActive,
   };
 })();
+
+document.addEventListener("jobs:changed", () => {
+  Jobs.syncSidebarFromApi();
+});

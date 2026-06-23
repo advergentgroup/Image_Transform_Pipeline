@@ -129,6 +129,14 @@
         </div>
       </div>
 
+      <div class="job-error-panel hidden" id="jobErrorPanel">
+        <p class="job-error-text" id="jobErrorText"></p>
+        <div class="job-error-actions">
+          <a href="/history" class="btn btn-ghost btn-sm">View History</a>
+          <a href="/new-job" class="btn btn-primary btn-sm">Try Again</a>
+        </div>
+      </div>
+
       <div class="download-row hidden" id="doneSection">
         <a class="btn btn-primary btn-sm" id="dlArchive" href="#" download>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -159,15 +167,18 @@
       <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M16 6v14M10 12l6-6 6 6" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 22v2a2 2 0 002 2h16a2 2 0 002-2v-2" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/></svg>
     </div>
     <p class="dropzone-title">Start a new transformation</p>
-    <p class="dropzone-hint">Drag &amp; drop up to 10 JPG/PNG images, or use the buttons below</p>
+    <p class="dropzone-hint">Drag &amp; drop up to 10 JPG/PNG images, or browse below</p>
+    <span class="file-counter" id="fileCounter">0 / 10 files</span>
     <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png" hidden />
+    <div class="preview-grid hidden" id="previewGrid"></div>
     <ul class="file-list hidden" id="fileList"></ul>
     <div class="dropzone-actions">
-      <a href="/new-job" class="btn btn-primary">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-        New Job
-      </a>
+      <button class="btn btn-primary" id="processBtn" type="button" disabled>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 7-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Start Processing
+      </button>
       <button class="btn btn-secondary" id="browseBtn" type="button">Browse Files</button>
+      <button class="btn btn-ghost hidden" id="clearBtn" type="button">Clear all</button>
     </div>
     <p class="error-msg" id="errorMsg"></p>
   </div>

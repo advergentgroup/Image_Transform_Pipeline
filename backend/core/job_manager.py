@@ -1,5 +1,6 @@
 import uuid
 import time
+import os
 from threading import Lock
 
 
@@ -22,6 +23,7 @@ class JobManager:
                 "progress": 0,
                 "total": file_count,
                 "results": [],
+                "files": [],
                 "created_at": time.time(),
                 "error": None,
             }
@@ -48,6 +50,36 @@ class JobManager:
             if job_id in self._jobs:
                 self._jobs[job_id]["status"] = "error"
                 self._jobs[job_id]["error"] = message
+
+    def set_files(self, job_id: str, filenames: list[str]):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["files"] = filenames
+
+    def sync_files_from_disk(self, job_id: str, upload_folder: str):
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job or job.get("files"):
+                return
+
+            job_dir = os.path.join(upload_folder, job_id)
+            if not os.path.isdir(job_dir):
+                return
+
+            names = sorted(
+                name for name in os.listdir(job_dir)
+                if os.path.isfile(os.path.join(job_dir, name))
+                and name.lower().rsplit(".", 1)[-1] in ("jpg", "jpeg", "png")
+            )
+            if names:
+                job["files"] = names
+
+    def sync_all_files_from_disk(self, upload_folder: str):
+        with self._lock:
+            job_ids = list(self._jobs.keys())
+
+        for job_id in job_ids:
+            self.sync_files_from_disk(job_id, upload_folder)
 
     def delete_job(self, job_id: str) -> bool:
         with self._lock:
@@ -111,4 +143,5 @@ class JobManager:
             "created_at": job["created_at"],
             "error": job["error"],
             "avg_hive": avg_hive,
+            "files": job.get("files", []),
         }
