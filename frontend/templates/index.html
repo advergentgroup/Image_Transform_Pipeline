@@ -3,11 +3,12 @@
 {% block title %}Dashboard — ImageTransform{% endblock %}
 
 {% block content %}
+<span class="hidden" data-page-title="page.dashboard"></span>
 
 <section class="hero">
   <div class="hero-text">
-    <h1 class="hero-title">Transform your <span class="hero-accent">illustrations</span></h1>
-    <p class="hero-sub">Into vector and 3D Pixar-style assets.</p>
+    <h1 class="hero-title" data-i18n-html="hero.title">Transform your <span class="hero-accent">illustrations</span></h1>
+    <p class="hero-sub" data-i18n="hero.sub">Into vector and 3D Pixar-style assets.</p>
   </div>
   <div class="hero-art" aria-hidden="true">
     <div class="hero-box">
@@ -24,7 +25,7 @@
       <svg viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="3" stroke="currentColor" stroke-width="1.5"/><circle cx="7.5" cy="8" r="1.5" fill="currentColor"/><path d="M3 14l4-4 3 3 4-5 3 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="stat-body">
-      <span class="stat-label">Images Processed</span>
+      <span class="stat-label" data-i18n="stat.imagesProcessed">Images Processed</span>
       <div class="stat-row">
         <span class="stat-value" id="statImages">—</span>
       </div>
@@ -35,7 +36,7 @@
       <svg viewBox="0 0 20 20" fill="none"><path d="M4 10l4 4 8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="stat-body">
-      <span class="stat-label">Successful Jobs</span>
+      <span class="stat-label" data-i18n="stat.successfulJobs">Successful Jobs</span>
       <div class="stat-row">
         <span class="stat-value" id="statSuccess">—</span>
       </div>
@@ -46,7 +47,7 @@
       <svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.5"/><path d="M7 7l6 6M13 7l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
     </div>
     <div class="stat-body">
-      <span class="stat-label">Failed Jobs</span>
+      <span class="stat-label" data-i18n="stat.failedJobs">Failed Jobs</span>
       <div class="stat-row">
         <span class="stat-value" id="statFailed">—</span>
       </div>
@@ -57,7 +58,7 @@
       <svg viewBox="0 0 20 20" fill="none"><path d="M10 3l2 4 4.5.5-3.5 3 1 4.5L10 13l-4 2 1-4.5-3.5-3L8.5 7 10 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
     </div>
     <div class="stat-body">
-      <span class="stat-label">Avg Hive Score</span>
+      <span class="stat-label" data-i18n="stat.avgHive">Avg Hive Score</span>
       <div class="stat-row">
         <span class="stat-value" id="statHive">—</span>
       </div>
@@ -69,7 +70,7 @@
 
   <div class="card active-job" id="activeJobCard">
     <div class="card-header">
-      <h2 class="card-title">Active Job</h2>
+      <h2 class="card-title" data-i18n="activeJob.title">Active Job</h2>
       <div class="card-header-right hidden" id="activeJobHeader">
         <span class="job-id" id="activeJobId">Job #0000</span>
         <span class="status-badge status-processing" id="activeJobStatus">Processing</span>
@@ -77,8 +78,8 @@
     </div>
 
     <div class="panel-empty hidden" id="activeJobEmpty">
-      <p>No job is running right now.</p>
-      <a href="/new-job" class="btn btn-primary btn-sm">Start New Job</a>
+      <p data-i18n="activeJob.empty">No job is running right now.</p>
+      <a href="/new-job" class="btn btn-primary btn-sm" data-i18n="activeJob.start">Start New Job</a>
     </div>
 
     <div id="activeJobBody" class="hidden">
@@ -99,63 +100,63 @@
         <span class="step-current-icon">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="#8B5CF6" stroke-width="1.5"/><path d="M6 9l2 2 4-4" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </span>
-        Current step: <strong id="stepCurrentLabel">Uniquifying</strong>
+        <span data-i18n="progress.currentStep">Current step:</span> <strong id="stepCurrentLabel">Uniquifying</strong>
       </div>
 
       <div class="stepper" id="stepper">
         <div class="step active">
           <div class="step-dot step-dot-glow"></div>
-          <span class="step-label">Uniquifying</span>
+          <span class="step-label" data-i18n-step="uniquifying">Uniquifying</span>
         </div>
         <div class="step-line"></div>
         <div class="step">
           <div class="step-dot"></div>
-          <span class="step-label">Vectorizing</span>
+          <span class="step-label" data-i18n-step="vectorizing">Vectorizing</span>
         </div>
         <div class="step-line"></div>
         <div class="step">
           <div class="step-dot"></div>
-          <span class="step-label">3D Transform</span>
+          <span class="step-label" data-i18n-step="transform3d">3D Transform</span>
         </div>
         <div class="step-line"></div>
         <div class="step">
           <div class="step-dot"></div>
-          <span class="step-label">Hive Check</span>
+          <span class="step-label" data-i18n-step="hive">Hive Check</span>
         </div>
         <div class="step-line"></div>
         <div class="step">
           <div class="step-dot"></div>
-          <span class="step-label">Complete</span>
+          <span class="step-label" data-i18n-step="complete">Complete</span>
         </div>
       </div>
 
       <div class="job-error-panel hidden" id="jobErrorPanel">
         <p class="job-error-text" id="jobErrorText"></p>
         <div class="job-error-actions">
-          <a href="/history" class="btn btn-ghost btn-sm">View History</a>
-          <a href="/new-job" class="btn btn-primary btn-sm">Try Again</a>
+          <a href="/history" class="btn btn-ghost btn-sm" data-i18n="action.viewHistory">View History</a>
+          <a href="/new-job" class="btn btn-primary btn-sm" data-i18n="action.tryAgain">Try Again</a>
         </div>
       </div>
 
       <div class="download-row hidden" id="doneSection">
         <a class="btn btn-primary btn-sm" id="dlArchive" href="#" download>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Download Archive
+          <span data-i18n="action.downloadArchive">Download Archive</span>
         </a>
-        <a href="/new-job" class="btn btn-ghost btn-sm">Process more</a>
+        <a href="/new-job" class="btn btn-ghost btn-sm" data-i18n="action.processMore">Process more</a>
       </div>
     </div>
   </div>
 
   <div class="card recent-jobs">
     <div class="card-header">
-      <h2 class="card-title">Recent Jobs</h2>
-      <a href="/history" class="link-muted">View All</a>
+      <h2 class="card-title" data-i18n="recentJobs.title">Recent Jobs</h2>
+      <a href="/history" class="link-muted" data-i18n="recentJobs.viewAll">View All</a>
     </div>
-    <div class="panel-loading hidden" id="recentLoading">Loading…</div>
+    <div class="panel-loading hidden" id="recentLoading" data-i18n="recentJobs.loading">Loading…</div>
     <ul class="job-list" id="recentJobsList"></ul>
     <div class="panel-empty hidden" id="recentEmpty">
-      <p>No jobs yet.</p>
+      <p data-i18n="recentJobs.empty">No jobs yet.</p>
     </div>
   </div>
 
@@ -166,8 +167,8 @@
     <div class="dropzone-icon-wrap">
       <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M16 6v14M10 12l6-6 6 6" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 22v2a2 2 0 002 2h16a2 2 0 002-2v-2" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/></svg>
     </div>
-    <p class="dropzone-title">Start a new transformation</p>
-    <p class="dropzone-hint">Drag &amp; drop up to 10 JPG/PNG images, or browse below</p>
+    <p class="dropzone-title" data-i18n="upload.title">Start a new transformation</p>
+    <p class="dropzone-hint" data-i18n="upload.hint">Drag &amp; drop up to 10 JPG/PNG images, or browse below</p>
     <span class="file-counter" id="fileCounter">0 / 10 files</span>
     <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png" hidden />
     <div class="preview-grid hidden" id="previewGrid"></div>
@@ -175,10 +176,10 @@
     <div class="dropzone-actions">
       <button class="btn btn-primary" id="processBtn" type="button" disabled>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 7-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Start Processing
+        <span data-i18n="upload.start">Start Processing</span>
       </button>
-      <button class="btn btn-secondary" id="browseBtn" type="button">Browse Files</button>
-      <button class="btn btn-ghost hidden" id="clearBtn" type="button">Clear all</button>
+      <button class="btn btn-secondary" id="browseBtn" type="button" data-i18n="upload.browse">Browse Files</button>
+      <button class="btn btn-ghost hidden" id="clearBtn" type="button" data-i18n="upload.clear">Clear all</button>
     </div>
     <p class="error-msg" id="errorMsg"></p>
   </div>

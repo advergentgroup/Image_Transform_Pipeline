@@ -21,18 +21,18 @@ document.addEventListener("click", async e => {
   const row = btn.closest(".job-item, .history-row");
   if (!row) return;
 
-  if (!confirm("Delete this job?")) return;
+  if (!confirm(I18n.t("confirm.deleteJob"))) return;
 
   const jobId = row.dataset.jobId;
   if (jobId && /^[0-9a-f-]{36}$/i.test(jobId)) {
     try {
       const res = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
       if (!res.ok) {
-        alert("Could not delete job.");
+        alert(I18n.t("error.deleteFailed"));
         return;
       }
     } catch {
-      alert("Network error.");
+      alert(I18n.t("error.network"));
       return;
     }
   }

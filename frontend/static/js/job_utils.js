@@ -1,6 +1,5 @@
 window.Jobs = (() => {
   const THUMBS = ["jt-a", "jt-b", "jt-c", "jt-d", "jt-e", "jt-f", "jt-g", "jt-h", "jt-i", "jt-j", "jt-k", "jt-l", "jt-m", "jt-n", "jt-o"];
-  const STEPS = ["Uniquifying", "Vectorizing", "3D Transform", "Hive Check", "Complete"];
 
   const ICONS = {
     download: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -19,9 +18,9 @@ window.Jobs = (() => {
   }
 
   function statusBadge(status) {
-    if (status === "done") return { cls: "status-done", label: "Completed" };
-    if (status === "error") return { cls: "status-error", label: "Error" };
-    return { cls: "status-processing", label: "Processing" };
+    if (status === "done") return { cls: "status-done", label: I18n.statusLabel("done") };
+    if (status === "error") return { cls: "status-error", label: I18n.statusLabel("error") };
+    return { cls: "status-processing", label: I18n.statusLabel("processing") };
   }
 
   function formatDate(ts) {
@@ -32,10 +31,10 @@ window.Jobs = (() => {
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
     const isYesterday = d.toDateString() === yesterday.toDateString();
-    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    if (sameDay) return `Today, ${time}`;
-    if (isYesterday) return `Yesterday, ${time}`;
-    return d.toLocaleDateString([], { month: "short", day: "numeric" }) + ", " + time;
+    const time = d.toLocaleTimeString(I18n.locale(), { hour: "2-digit", minute: "2-digit" });
+    if (sameDay) return I18n.t("date.today", { time });
+    if (isYesterday) return I18n.t("date.yesterday", { time });
+    return d.toLocaleDateString(I18n.locale(), { month: "short", day: "numeric" }) + ", " + time;
   }
 
   function avgHive(job) {
@@ -58,7 +57,7 @@ window.Jobs = (() => {
       return `<span class="score-chip score-warn">—</span>`;
     }
     const cls = score <= 12 ? "score-good" : score <= 18 ? "score-warn" : "score-bad";
-    return `<span class="score-chip ${cls}">${score}% AI</span>`;
+    return `<span class="score-chip ${cls}">${I18n.t("job.hiveAi", { score })}</span>`;
   }
 
   function fileUrl(jobId, filename) {
@@ -82,15 +81,15 @@ window.Jobs = (() => {
   function renderActions(status) {
     const ui = uiStatus(status);
     if (ui === "error") {
-      return `<button class="icon-btn icon-btn-sm btn-retry" type="button" aria-label="Retry job">${ICONS.retry}</button>
-        <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="Delete">${ICONS.delete}</button>`;
+      return `<button class="icon-btn icon-btn-sm btn-retry" type="button" aria-label="${I18n.t("aria.retryJob")}">${ICONS.retry}</button>
+        <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="${I18n.t("aria.delete")}">${ICONS.delete}</button>`;
     }
     if (ui === "processing") {
       return `<span class="job-action-spacer" aria-hidden="true"></span>
-        <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="Delete">${ICONS.delete}</button>`;
+        <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="${I18n.t("aria.delete")}">${ICONS.delete}</button>`;
     }
-    return `<button class="icon-btn icon-btn-sm btn-download" type="button" aria-label="Download archive">${ICONS.download}</button>
-      <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="Delete">${ICONS.delete}</button>`;
+    return `<button class="icon-btn icon-btn-sm btn-download" type="button" aria-label="${I18n.t("aria.downloadArchive")}">${ICONS.download}</button>
+      <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="${I18n.t("aria.delete")}">${ICONS.delete}</button>`;
   }
 
   function renderHistoryRow(job, index) {
@@ -99,10 +98,10 @@ window.Jobs = (() => {
     return `<li class="history-row" data-job-id="${job.job_id}" data-status="${ui}">
       <div class="ht-col ht-job">
         <div class="job-thumbs">${renderThumbs(job, index)}</div>
-        <div class="job-info"><span class="job-info-id">Job ${shortId(job.job_id)}</span></div>
+        <div class="job-info"><span class="job-info-id">${I18n.jobLabel(shortId(job.job_id))}</span></div>
       </div>
       <span class="ht-col ht-date">${formatDate(job.created_at)}</span>
-      <span class="ht-col ht-files">${job.total || 0} files</span>
+      <span class="ht-col ht-files">${I18n.t("job.files", { count: job.total || 0 })}</span>
       <span class="ht-col ht-score">${hiveChip(job)}</span>
       <span class="ht-col ht-status"><span class="status-badge ${badge.cls}">${badge.label}</span></span>
       <div class="ht-col ht-actions job-actions">${renderActions(job.status)}</div>
@@ -114,10 +113,10 @@ window.Jobs = (() => {
     return `<li class="job-item" data-job-id="${job.job_id}" data-status="${uiStatus(job.status)}">
       <div class="job-thumbs">${renderThumbs(job, index)}</div>
       <div class="job-info">
-        <span class="job-info-id">Job ${shortId(job.job_id)}</span>
+        <span class="job-info-id">${I18n.jobLabel(shortId(job.job_id))}</span>
         <span class="job-info-time">${formatDate(job.created_at)}</span>
       </div>
-      <span class="job-files">${job.total || 0} files</span>
+      <span class="job-files">${I18n.t("job.files", { count: job.total || 0 })}</span>
       <span class="status-badge ${badge.cls}">${badge.label}</span>
       <div class="job-actions">${renderActions(job.status)}</div>
     </li>`;
@@ -159,10 +158,11 @@ window.Jobs = (() => {
       activeIdx = Math.min(3, Math.floor((progress / total) * 4) + 1);
     }
 
-    if (stepCurrentLabel.textContent !== STEPS[activeIdx]) {
+    const stepLabel = I18n.step(activeIdx);
+    if (stepCurrentLabel.textContent !== stepLabel) {
       stepCurrentLabel.classList.remove("is-changing");
       void stepCurrentLabel.offsetWidth;
-      stepCurrentLabel.textContent = STEPS[activeIdx];
+      stepCurrentLabel.textContent = stepLabel;
       stepCurrentLabel.classList.add("is-changing");
     }
 
@@ -202,8 +202,8 @@ window.Jobs = (() => {
     }
 
     sidebar.classList.remove("hidden");
-    if (title) title.textContent = "Job " + shortId(jobId);
-    if (meta) meta.textContent = `${progress} / ${total} images`;
+    if (title) title.textContent = I18n.jobLabel(shortId(jobId));
+    if (meta) meta.textContent = I18n.progressImages(progress, total);
     if (bar) bar.style.width = (total > 0 ? Math.round(progress / total * 100) : 0) + "%";
   }
 
@@ -273,12 +273,12 @@ window.Jobs = (() => {
     }
 
     const eta = root.querySelector("#activeEta");
-    if (eta) eta.textContent = "Failed";
+    if (eta) eta.textContent = I18n.t("progress.failed");
 
     root.querySelector(".progress-fill")?.classList.add("progress-fill-error");
 
     const text = root.querySelector("#jobErrorText");
-    if (text) text.textContent = message || "Processing failed.";
+    if (text) text.textContent = message || I18n.t("progress.processingFailed");
     root.querySelector("#jobErrorPanel")?.classList.remove("hidden");
   }
 
@@ -311,7 +311,6 @@ window.Jobs = (() => {
   }
 
   return {
-    STEPS,
     shortId,
     uiStatus,
     statusBadge,
@@ -339,5 +338,9 @@ window.Jobs = (() => {
 })();
 
 document.addEventListener("jobs:changed", () => {
+  Jobs.syncSidebarFromApi();
+});
+
+document.addEventListener("i18n:changed", () => {
   Jobs.syncSidebarFromApi();
 });

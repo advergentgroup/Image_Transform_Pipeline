@@ -24,8 +24,6 @@ const doneSection    = document.getElementById("doneSection");
 const dlArchive      = document.getElementById("dlArchive");
 const retryJobBtn    = document.getElementById("retryJobBtn");
 
-const STEPS = ["Uniquifying", "Vectorizing", "3D Transform", "Hive Check", "Complete"];
-
 let selectedFiles = [];
 let pollingTimer  = null;
 let jobStartTime  = null;
@@ -93,7 +91,7 @@ function clearFiles() {
   previewGrid.classList.add("hidden");
   clearBtn.classList.add("hidden");
   processBtn.disabled = true;
-  fileCounter.textContent = "0 / 10 files";
+  fileCounter.textContent = I18n.fileCounter(0);
   errorMsg.textContent = "";
 }
 
@@ -103,11 +101,11 @@ function handleFiles(files) {
   const valid = files.filter(f => /\.(jpe?g|png)$/i.test(f.name));
 
   if (valid.length === 0) {
-    errorMsg.textContent = "Please upload JPG or PNG files.";
+    errorMsg.textContent = I18n.t("error.invalidFormat");
     return;
   }
   if (valid.length > 10) {
-    errorMsg.textContent = "Maximum 10 files per upload.";
+    errorMsg.textContent = I18n.t("error.maxFiles");
     return;
   }
 
@@ -120,7 +118,7 @@ function handleFiles(files) {
 }
 
 function renderFiles() {
-  fileCounter.textContent = `${selectedFiles.length} / 10 files`;
+  fileCounter.textContent = I18n.fileCounter(selectedFiles.length);
 
   previewGrid.classList.remove("hidden");
   previewGrid.innerHTML = selectedFiles.map((f, i) => {
@@ -166,7 +164,7 @@ processBtn.addEventListener("click", async e => {
     const data = await res.json();
 
     if (!res.ok) {
-      showError(data.error || "Upload failed.");
+      showError(data.error || I18n.t("error.uploadFailed"));
       processBtn.disabled = false;
       browseBtn.disabled = false;
       clearBtn.disabled = false;
@@ -176,7 +174,7 @@ processBtn.addEventListener("click", async e => {
     showProgress(data.job_id, data.file_count);
 
   } catch {
-    showError("Network error. Please try again.");
+    showError(I18n.t("error.network"));
     processBtn.disabled = false;
     browseBtn.disabled = false;
     clearBtn.disabled = false;
@@ -200,8 +198,8 @@ function showProgress(jobId, total, initial) {
     progressCard.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  activeJobId.textContent = "Job " + shortId;
-  activeJobStatus.textContent = "Processing";
+  activeJobId.textContent = I18n.jobLabel(shortId);
+  activeJobStatus.textContent = I18n.statusLabel("processing");
   activeJobStatus.className = "status-badge status-processing";
   doneSection.classList.add("hidden");
   stepCurrent.classList.remove("hidden");
@@ -222,7 +220,7 @@ function updateProgressUI(progress, total) {
   const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
   progressBar.style.width = pct + "%";
   if (currentJobId) Jobs.updateSidebar(currentJobId, progress, total, true);
-  progressLabel.textContent = `${progress} / ${total} images`;
+  progressLabel.textContent = I18n.progressImages(progress, total);
   activeProgressPct.textContent = pct + "%";
 
   if (progress < total && jobStartTime) {
@@ -231,9 +229,11 @@ function updateProgressUI(progress, total) {
     const remaining = Math.max(0, Math.round((total - progress) * perItem));
     const mins = Math.floor(remaining / 60);
     const secs = remaining % 60;
-    activeEta.textContent = progress === 0 ? "ETA calculating…" : `ETA ${mins}m ${secs}s`;
+    activeEta.textContent = progress === 0
+      ? I18n.t("progress.etaCalculating")
+      : I18n.t("progress.eta", { mins, secs });
   } else if (progress >= total) {
-    activeEta.textContent = "Complete";
+    activeEta.textContent = I18n.t("progress.complete");
   }
 }
 
@@ -257,7 +257,7 @@ function updateStepper(progress, total) {
     activeIdx = Math.min(3, Math.floor(ratio * 4) + 1);
   }
 
-  animateStepLabel(stepCurrentLabel, STEPS[activeIdx]);
+  animateStepLabel(stepCurrentLabel, I18n.step(activeIdx));
 
   steps.forEach((step, i) => {
     step.classList.remove("done", "active");
@@ -291,7 +291,7 @@ async function pollStatus(jobId, total) {
 
     if (data.status === "error") {
       stopPolling();
-      showFailed(data.error || "Processing failed.");
+      showFailed(data.error || I18n.t("progress.processingFailed"));
       Jobs.notifyChanged();
       return;
     }
@@ -315,7 +315,7 @@ async function pollStatus(jobId, total) {
 
 function showFailed(message) {
   Jobs.clearActiveJob();
-  activeJobStatus.textContent = "Error";
+  activeJobStatus.textContent = I18n.statusLabel("error");
   activeJobStatus.className = "status-badge status-error";
   Jobs.freezeProgressUI(progressCard, message);
   Jobs.updateSidebar(null, 0, 0, false);
@@ -336,9 +336,9 @@ function renderResults(results, total, files) {
 
 function showDone(jobId) {
   Jobs.clearActiveJob();
-  activeJobStatus.textContent = "Completed";
+  activeJobStatus.textContent = I18n.statusLabel("done");
   activeJobStatus.className = "status-badge status-done";
-  activeEta.textContent = "Complete";
+  activeEta.textContent = I18n.t("progress.complete");
   stepCurrent.classList.add("hidden");
   updateStepper(999, 1);
   doneSection.classList.remove("hidden");
@@ -361,8 +361,8 @@ async function resumeActiveJob() {
     if (data.status === "error") {
       Jobs.clearActiveJob();
       progressCard.classList.remove("hidden");
-      activeJobId.textContent = "Job " + Jobs.shortId(saved.jobId);
-      showFailed(data.error || "Processing failed.");
+      activeJobId.textContent = I18n.jobLabel(Jobs.shortId(saved.jobId));
+      showFailed(data.error || I18n.t("progress.processingFailed"));
       Jobs.notifyChanged();
       return;
     }
@@ -370,7 +370,7 @@ async function resumeActiveJob() {
     if (data.status === "done") {
       Jobs.clearActiveJob();
       progressCard.classList.remove("hidden");
-      activeJobId.textContent = "Job " + Jobs.shortId(saved.jobId);
+      activeJobId.textContent = I18n.jobLabel(Jobs.shortId(saved.jobId));
       updateProgressUI(data.progress, total);
       renderResults(data.results, total, data.files);
       showDone(saved.jobId);
@@ -387,6 +387,11 @@ async function resumeActiveJob() {
     Jobs.clearActiveJob();
   }
 }
+
+document.addEventListener("i18n:changed", () => {
+  if (selectedFiles.length) renderFiles();
+  else if (fileCounter) fileCounter.textContent = I18n.fileCounter(0);
+});
 
 resumeActiveJob();
 

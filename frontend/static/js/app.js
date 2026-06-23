@@ -59,7 +59,7 @@ function clearFiles() {
     previewGrid.classList.add("hidden");
   }
   clearBtn?.classList.add("hidden");
-  if (fileCounter) fileCounter.textContent = "0 / 10 files";
+  if (fileCounter) fileCounter.textContent = I18n.fileCounter(0);
   if (errorMsg) errorMsg.textContent = "";
   setUploadEnabled(true);
 }
@@ -77,11 +77,11 @@ function handleFiles(files) {
   const valid = files.filter(f => /\.(jpe?g|png)$/i.test(f.name));
 
   if (valid.length === 0) {
-    if (errorMsg) errorMsg.textContent = "Please upload JPG or PNG files.";
+    if (errorMsg) errorMsg.textContent = I18n.t("error.invalidFormat");
     return;
   }
   if (valid.length > 10) {
-    if (errorMsg) errorMsg.textContent = "Maximum 10 files per upload.";
+    if (errorMsg) errorMsg.textContent = I18n.t("error.maxFiles");
     return;
   }
 
@@ -94,7 +94,7 @@ function handleFiles(files) {
 }
 
 function renderSelectedFiles() {
-  if (fileCounter) fileCounter.textContent = `${selectedFiles.length} / 10 files`;
+  if (fileCounter) fileCounter.textContent = I18n.fileCounter(selectedFiles.length);
 
   if (previewGrid) {
     previewGrid.classList.remove("hidden");
@@ -166,7 +166,7 @@ function initUploadZone() {
       const data = await res.json();
 
       if (!res.ok) {
-        if (errorMsg) errorMsg.textContent = data.error || "Upload failed.";
+        if (errorMsg) errorMsg.textContent = data.error || I18n.t("error.uploadFailed");
         setUploadEnabled(true);
         return;
       }
@@ -175,7 +175,7 @@ function initUploadZone() {
       clearFiles();
       startJobFromUpload(data.job_id, data.file_count, fileNames);
     } catch {
-      if (errorMsg) errorMsg.textContent = "Network error. Please try again.";
+      if (errorMsg) errorMsg.textContent = I18n.t("error.network");
       setUploadEnabled(true);
     }
   });
@@ -299,9 +299,9 @@ function showActivePanel(job) {
   doneSection?.classList.add("hidden");
   stepCurrent?.classList.remove("hidden");
 
-  if (activeJobId) activeJobId.textContent = "Job " + Jobs.shortId(job.job_id);
+  if (activeJobId) activeJobId.textContent = I18n.jobLabel(Jobs.shortId(job.job_id));
   if (activeJobStatus) {
-    activeJobStatus.textContent = "Processing";
+    activeJobStatus.textContent = I18n.statusLabel(job.status || "processing");
     activeJobStatus.className = "status-badge status-processing";
   }
 
@@ -340,10 +340,10 @@ async function pollOnce(jobId, total) {
       stopPolling();
       Jobs.clearActiveJob();
       if (activeJobStatus) {
-        activeJobStatus.textContent = "Error";
+        activeJobStatus.textContent = I18n.statusLabel("error");
         activeJobStatus.className = "status-badge status-error";
       }
-      Jobs.freezeProgressUI(activeJobCard, data.error || "Processing failed.");
+      Jobs.freezeProgressUI(activeJobCard, data.error || I18n.t("progress.processingFailed"));
       setUploadEnabled(true);
       Jobs.updateSidebar(null, 0, 0, false);
       Jobs.notifyChanged();
@@ -363,10 +363,10 @@ async function pollOnce(jobId, total) {
         );
       }
       if (activeJobStatus) {
-        activeJobStatus.textContent = "Completed";
+        activeJobStatus.textContent = I18n.statusLabel("done");
         activeJobStatus.className = "status-badge status-done";
       }
-      if (activeEta) activeEta.textContent = "Complete";
+      if (activeEta) activeEta.textContent = I18n.t("progress.complete");
       stepCurrent?.classList.add("hidden");
       doneSection?.classList.remove("hidden");
       if (dlArchive) dlArchive.href = `/api/download/${jobId}`;
@@ -396,7 +396,7 @@ async function pollOnce(jobId, total) {
 function updateProgressUI(progress, total) {
   const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
   if (progressBar) progressBar.style.width = pct + "%";
-  if (progressLabel) progressLabel.textContent = `${progress} / ${total} images`;
+  if (progressLabel) progressLabel.textContent = I18n.progressImages(progress, total);
   if (activeProgressPct) activeProgressPct.textContent = pct + "%";
 
   if (progress < total && jobStartTime) {
@@ -406,11 +406,19 @@ function updateProgressUI(progress, total) {
     const mins = Math.floor(remaining / 60);
     const secs = remaining % 60;
     if (activeEta) {
-      activeEta.textContent = progress === 0 ? "ETA calculating…" : `ETA ${mins}m ${secs}s`;
+      activeEta.textContent = progress === 0
+        ? I18n.t("progress.etaCalculating")
+        : I18n.t("progress.eta", { mins, secs });
     }
   } else if (progress >= total && activeEta) {
-    activeEta.textContent = "Complete";
+    activeEta.textContent = I18n.t("progress.complete");
   }
 }
+
+document.addEventListener("i18n:changed", () => {
+  loadRecentJobs();
+  if (selectedFiles.length) renderSelectedFiles();
+  else if (fileCounter) fileCounter.textContent = I18n.fileCounter(0);
+});
 
 window.addEventListener("beforeunload", stopPolling);

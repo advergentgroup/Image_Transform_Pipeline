@@ -3,42 +3,43 @@
 {% block title %}History — ImageTransform{% endblock %}
 
 {% block content %}
+<span class="hidden" data-page-title="page.history"></span>
 
 <section class="page-header">
   <div class="page-header-text">
-    <h1 class="page-title">Job History</h1>
-    <p class="page-sub">Browse and download results from all past transformations.</p>
+    <h1 class="page-title" data-i18n="history.title">Job History</h1>
+    <p class="page-sub" data-i18n="history.sub">Browse and download results from all past transformations.</p>
   </div>
   <a href="/new-job" class="btn btn-primary">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-    New Job
+    <span data-i18n="nav.newJob">New Job</span>
   </a>
 </section>
 
 <section class="history-toolbar">
   <div class="search-wrap">
     <svg class="search-icon" viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M14 14l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-    <input type="search" class="search-input" id="searchInput" placeholder="Search by job ID…" />
+    <input type="search" class="search-input" id="searchInput" data-i18n-placeholder="history.search" placeholder="Search by job ID…" />
   </div>
   <div class="filter-pills" id="filterPills">
-    <button class="filter-pill active" type="button" data-filter="all">All</button>
-    <button class="filter-pill" type="button" data-filter="completed">Completed</button>
-    <button class="filter-pill" type="button" data-filter="processing">Processing</button>
-    <button class="filter-pill" type="button" data-filter="error">Error</button>
+    <button class="filter-pill active" type="button" data-filter="all" data-i18n="history.filter.all">All</button>
+    <button class="filter-pill" type="button" data-filter="completed" data-i18n="history.filter.completed">Completed</button>
+    <button class="filter-pill" type="button" data-filter="processing" data-i18n="history.filter.processing">Processing</button>
+    <button class="filter-pill" type="button" data-filter="error" data-i18n="history.filter.error">Error</button>
   </div>
 </section>
 
 <section class="card history-card">
   <div class="history-table-head">
-    <span class="ht-col ht-job">Job</span>
-    <span class="ht-col ht-date">Date</span>
-    <span class="ht-col ht-files">Files</span>
-    <span class="ht-col ht-score">Avg Hive</span>
-    <span class="ht-col ht-status">Status</span>
-    <span class="ht-col ht-actions">Actions</span>
+    <span class="ht-col ht-job" data-i18n="history.col.job">Job</span>
+    <span class="ht-col ht-date" data-i18n="history.col.date">Date</span>
+    <span class="ht-col ht-files" data-i18n="history.col.files">Files</span>
+    <span class="ht-col ht-score" data-i18n="history.col.score">Avg Hive</span>
+    <span class="ht-col ht-status" data-i18n="history.col.status">Status</span>
+    <span class="ht-col ht-actions" data-i18n="history.col.actions">Actions</span>
   </div>
 
-  <div class="panel-loading hidden" id="historyLoading">Loading jobs…</div>
+  <div class="panel-loading hidden" id="historyLoading" data-i18n="history.loading">Loading jobs…</div>
 
   <ul class="history-list" id="historyList"></ul>
 
@@ -47,9 +48,9 @@
   </div>
 
   <div class="pagination hidden" id="historyPagination">
-    <button class="btn btn-ghost btn-sm" type="button" id="historyPrev" disabled>Previous</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="historyPrev" disabled data-i18n="history.prev">Previous</button>
     <span class="pagination-info" id="historyPageInfo">Page 1 of 1</span>
-    <button class="btn btn-ghost btn-sm" type="button" id="historyNext" disabled>Next</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="historyNext" disabled data-i18n="history.next">Next</button>
   </div>
 </section>
 

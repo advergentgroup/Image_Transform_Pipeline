@@ -3,11 +3,12 @@
 {% block title %}New Job — ImageTransform{% endblock %}
 
 {% block content %}
+<span class="hidden" data-page-title="page.newJob"></span>
 
 <section class="page-header">
   <div class="page-header-text">
-    <h1 class="page-title">New Job</h1>
-    <p class="page-sub">Upload illustrations and start a new transformation pipeline.</p>
+    <h1 class="page-title" data-i18n="page.newJob">New Job</h1>
+    <p class="page-sub" data-i18n="upload.pageSub">Upload illustrations and start a new transformation pipeline.</p>
   </div>
 </section>
 
@@ -15,7 +16,7 @@
 
   <div class="card upload-card">
     <div class="card-header">
-      <h2 class="card-title">Upload Images</h2>
+      <h2 class="card-title" data-i18n="upload.cardTitle">Upload Images</h2>
       <span class="file-counter" id="fileCounter">0 / 10 files</span>
     </div>
 
@@ -23,8 +24,8 @@
       <div class="dropzone-icon-wrap">
         <svg width="40" height="40" viewBox="0 0 32 32" fill="none"><path d="M16 6v14M10 12l6-6 6 6" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 22v2a2 2 0 002 2h16a2 2 0 002-2v-2" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/></svg>
       </div>
-      <p class="dropzone-title">Drag &amp; drop your images here</p>
-      <p class="dropzone-hint">JPG or PNG · Maximum 10 files per job</p>
+      <p class="dropzone-title" data-i18n="upload.titleLg">Drag &amp; drop your images here</p>
+      <p class="dropzone-hint" data-i18n="upload.hintLg">JPG or PNG · Maximum 10 files per job</p>
       <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png" hidden />
     </div>
 
@@ -35,10 +36,10 @@
     <div class="upload-actions">
       <button class="btn btn-primary" id="processBtn" type="button" disabled>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 7-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Start Processing
+        <span data-i18n="upload.start">Start Processing</span>
       </button>
-      <button class="btn btn-secondary" id="browseBtn" type="button">Browse Files</button>
-      <button class="btn btn-ghost hidden" id="clearBtn" type="button">Clear all</button>
+      <button class="btn btn-secondary" id="browseBtn" type="button" data-i18n="upload.browse">Browse Files</button>
+      <button class="btn btn-ghost hidden" id="clearBtn" type="button" data-i18n="upload.clear">Clear all</button>
     </div>
 
     <p class="error-msg" id="errorMsg"></p>
@@ -46,47 +47,47 @@
 
   <div class="job-sidebar-col">
     <div class="card info-card">
-      <h3 class="info-card-title">Output Archive</h3>
+      <h3 class="info-card-title" data-i18n="info.outputArchive">Output Archive</h3>
       <ul class="info-list">
         <li class="info-item">
           <span class="info-icon info-icon-purple">⬡</span>
           <div>
             <span class="info-item-label">vector/</span>
-            <span class="info-item-desc">Image trace + gradient background</span>
+            <span class="info-item-desc" data-i18n="info.vectorDesc">Image trace + gradient background</span>
           </div>
         </li>
         <li class="info-item">
           <span class="info-icon info-icon-teal">◈</span>
           <div>
             <span class="info-item-label">3d/</span>
-            <span class="info-item-desc">3D Pixar style renders</span>
+            <span class="info-item-desc" data-i18n="info.threedDesc">3D Pixar style renders</span>
           </div>
         </li>
       </ul>
     </div>
 
     <div class="card info-card">
-      <h3 class="info-card-title">Pipeline Steps</h3>
+      <h3 class="info-card-title" data-i18n="info.pipelineSteps">Pipeline Steps</h3>
       <ol class="pipeline-list">
-        <li><span class="pipeline-num">1</span> AI Uniquifying</li>
-        <li><span class="pipeline-num">2</span> Vectorize + Gradient</li>
-        <li><span class="pipeline-num">3</span> 3D Pixar Transform</li>
-        <li><span class="pipeline-num">4</span> Hive Detect Check</li>
-        <li><span class="pipeline-num">5</span> ZIP &amp; Download</li>
+        <li><span class="pipeline-num">1</span> <span data-i18n="info.step1">AI Uniquifying</span></li>
+        <li><span class="pipeline-num">2</span> <span data-i18n="info.step2">Vectorize + Gradient</span></li>
+        <li><span class="pipeline-num">3</span> <span data-i18n="info.step3">3D Pixar Transform</span></li>
+        <li><span class="pipeline-num">4</span> <span data-i18n="info.step4">Hive Detect Check</span></li>
+        <li><span class="pipeline-num">5</span> <span data-i18n="info.step5">ZIP &amp; Download</span></li>
       </ol>
     </div>
 
     <div class="card info-card info-card-dim">
       <div class="info-stat-row">
-        <span class="info-stat-label">Max files</span>
+        <span class="info-stat-label" data-i18n="info.maxFiles">Max files</span>
         <span class="info-stat-value">10</span>
       </div>
       <div class="info-stat-row">
-        <span class="info-stat-label">Formats</span>
+        <span class="info-stat-label" data-i18n="info.formats">Formats</span>
         <span class="info-stat-value">JPG, PNG</span>
       </div>
       <div class="info-stat-row">
-        <span class="info-stat-label">Max upload</span>
+        <span class="info-stat-label" data-i18n="info.maxUpload">Max upload</span>
         <span class="info-stat-value">50 MB</span>
       </div>
     </div>
@@ -96,7 +97,7 @@
 
 <section class="card progress-card hidden" id="progressCard">
   <div class="card-header">
-    <h2 class="card-title">Processing Job</h2>
+    <h2 class="card-title" data-i18n="progress.title">Processing Job</h2>
     <div class="card-header-right">
       <span class="job-id" id="activeJobId">Job #0000</span>
       <span class="status-badge status-processing" id="activeJobStatus">Processing</span>
@@ -120,50 +121,50 @@
     <span class="step-current-icon">
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="#8B5CF6" stroke-width="1.5"/><path d="M6 9l2 2 4-4" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </span>
-    Current step: <strong id="stepCurrentLabel">Uniquifying</strong>
+    <span data-i18n="progress.currentStep">Current step:</span> <strong id="stepCurrentLabel">Uniquifying</strong>
   </div>
 
   <div class="stepper" id="stepper">
     <div class="step active">
       <div class="step-dot step-dot-glow"></div>
-      <span class="step-label">Uniquifying</span>
+      <span class="step-label" data-i18n-step="uniquifying">Uniquifying</span>
     </div>
     <div class="step-line"></div>
     <div class="step">
       <div class="step-dot"></div>
-      <span class="step-label">Vectorizing</span>
+      <span class="step-label" data-i18n-step="vectorizing">Vectorizing</span>
     </div>
     <div class="step-line"></div>
     <div class="step">
       <div class="step-dot"></div>
-      <span class="step-label">3D Transform</span>
+      <span class="step-label" data-i18n-step="transform3d">3D Transform</span>
     </div>
     <div class="step-line"></div>
     <div class="step">
       <div class="step-dot"></div>
-      <span class="step-label">Hive Check</span>
+      <span class="step-label" data-i18n-step="hive">Hive Check</span>
     </div>
     <div class="step-line"></div>
     <div class="step">
       <div class="step-dot"></div>
-      <span class="step-label">Complete</span>
+      <span class="step-label" data-i18n-step="complete">Complete</span>
     </div>
   </div>
 
   <div class="job-error-panel hidden" id="jobErrorPanel">
     <p class="job-error-text" id="jobErrorText"></p>
     <div class="job-error-actions">
-      <a href="/history" class="btn btn-ghost btn-sm">View History</a>
-      <button class="btn btn-primary btn-sm" id="retryJobBtn" type="button">Try Again</button>
+      <a href="/history" class="btn btn-ghost btn-sm" data-i18n="action.viewHistory">View History</a>
+      <button class="btn btn-primary btn-sm" id="retryJobBtn" type="button" data-i18n="action.tryAgain">Try Again</button>
     </div>
   </div>
 
   <div class="download-row hidden" id="doneSection">
     <a class="btn btn-primary btn-sm" id="dlArchive" href="#" download>
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Download Archive
+      <span data-i18n="action.downloadArchive">Download Archive</span>
     </a>
-    <a class="btn btn-ghost btn-sm" href="/">Back to Dashboard</a>
+    <a class="btn btn-ghost btn-sm" href="/" data-i18n="action.backDashboard">Back to Dashboard</a>
   </div>
 </section>
 

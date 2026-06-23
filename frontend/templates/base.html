@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="uk">
+<html lang="en">
 {% macro retry_icon() %}
 <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11.5 2.5V5h2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 5.2A5.5 5.5 0 1 1 4.2 11.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
 {% endmacro %}
@@ -40,24 +40,24 @@
       <nav class="sidebar-nav">
         <a href="/" class="nav-item{% if active_page == 'dashboard' %} active{% endif %}">
           <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><rect x="2" y="2" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="11" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.5"/></svg>
-          Dashboard
+          <span data-i18n="nav.dashboard">Dashboard</span>
         </a>
         <a href="/new-job" class="nav-item{% if active_page == 'new_job' %} active{% endif %}">
           <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          New Job
+          <span data-i18n="nav.newJob">New Job</span>
         </a>
         <a href="/history" class="nav-item{% if active_page == 'history' %} active{% endif %}">
           <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          History
+          <span data-i18n="nav.history">History</span>
         </a>
         <a href="#" class="nav-item">
           <svg class="nav-icon" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.93 4.93l1.41 1.41M13.66 13.66l1.41 1.41M4.93 15.07l1.41-1.41M13.66 6.34l1.41-1.41" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Settings
+          <span data-i18n="nav.settings">Settings</span>
         </a>
       </nav>
 
       <div class="sidebar-job hidden" id="sidebarJob">
-        <div class="sidebar-job-label">Processing</div>
+        <div class="sidebar-job-label" data-i18n="sidebar.processing">Processing</div>
         <div class="sidebar-job-title" id="sidebarJobTitle">Job #0000</div>
         <div class="sidebar-job-meta" id="sidebarJobMeta">0 / 0 images</div>
         <div class="progress-track progress-track-sm">
@@ -72,12 +72,28 @@
         <div class="topbar-left">
           <a href="/new-job" class="btn btn-primary">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-            New Job
+            <span data-i18n="topbar.newJob">New Job</span>
           </a>
           <button class="btn btn-secondary" type="button" disabled>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="9" y="3" width="3" height="10" rx="1" fill="currentColor"/></svg>
-            Pause
+            <span data-i18n="topbar.pause">Pause</span>
           </button>
+        </div>
+        <div class="topbar-right">
+          <div class="lang-switcher" id="langSwitcher">
+            <button class="lang-btn" type="button" id="langBtn" aria-haspopup="true" aria-expanded="false" data-i18n-aria="lang.switch">
+              <svg class="lang-globe" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M2.5 10h15M10 2.5c2.2 2.8 2.7 5.5 2.7 7.5S12.2 17.2 10 17.5M10 2.5C7.8 5.3 7.3 8 7.3 10s.5 4.7 2.7 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              <span class="lang-code" id="langCode">EN</span>
+            </button>
+            <div class="lang-menu hidden" id="langMenu" role="menu">
+              <button type="button" class="lang-option" data-lang="en" role="menuitemradio">English</button>
+              <button type="button" class="lang-option" data-lang="ru" role="menuitemradio">Русский</button>
+              <button type="button" class="lang-option" data-lang="ka" role="menuitemradio">ქართული</button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -87,6 +103,7 @@
     </div>
   </div>
 
+  <script src="/static/js/i18n.js"></script>
   <script src="/static/js/job_utils.js"></script>
   {% block scripts %}{% endblock %}
   <script src="/static/js/jobs.js"></script>

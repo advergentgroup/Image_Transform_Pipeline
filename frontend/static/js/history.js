@@ -24,6 +24,9 @@ if (searchInput) {
 }
 
 document.addEventListener("jobs:changed", loadJobs);
+document.addEventListener("i18n:changed", () => {
+  loadJobs();
+});
 
 loadJobs();
 Jobs.syncSidebarFromApi();
@@ -44,7 +47,7 @@ async function loadJobs() {
   } catch {
     allJobs = [];
     historyList.innerHTML = "";
-    if (historyEmptyText) historyEmptyText.textContent = "Could not load jobs. Check that the server is running.";
+    if (historyEmptyText) historyEmptyText.textContent = I18n.t("history.loadError");
     historyEmpty?.classList.remove("hidden");
   } finally {
     historyLoading?.classList.add("hidden");
@@ -59,7 +62,7 @@ function applyFilters() {
   let visible = 0;
 
   if (allJobs.length === 0 && rows.length === 0) {
-    if (historyEmptyText) historyEmptyText.textContent = "No jobs yet. Start your first transformation.";
+    if (historyEmptyText) historyEmptyText.textContent = I18n.t("history.empty");
     historyEmpty.classList.remove("hidden");
     return;
   }
@@ -80,8 +83,8 @@ function applyFilters() {
   if (visible === 0) {
     if (historyEmptyText) {
       historyEmptyText.textContent = query || activeFilter !== "all"
-        ? "No jobs match your search."
-        : "No jobs yet. Start your first transformation.";
+        ? I18n.t("history.emptySearch")
+        : I18n.t("history.empty");
     }
     historyEmpty.classList.remove("hidden");
   } else {
