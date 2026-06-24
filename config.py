@@ -30,9 +30,14 @@ class Config:
     IMG2IMG_STRENGTH = float(os.getenv("IMG2IMG_STRENGTH", "0.25"))
     IMG2IMG_3D_STRENGTH = float(os.getenv("IMG2IMG_3D_STRENGTH", "0.55"))
 
-    # Hivedetect
+    # Hive AI-generated content detection (V3 Playground)
+    # https://docs.thehive.ai/docs/ai-generated-and-deepfake-content-detection-playground
     HIVEDETECT_API_KEY = os.getenv("HIVEDETECT_API_KEY", "")
-    HIVEDETECT_URL = "https://hivedetect.ai/api/check"
+    HIVEDETECT_URL = os.getenv(
+        "HIVEDETECT_URL",
+        "https://api.thehive.ai/api/v3/hive/ai-generated-and-deepfake-content-detection",
+    )
+    HIVEDETECT_USE_MOCK = os.getenv("HIVEDETECT_USE_MOCK", "0")
 
     # Processing
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
