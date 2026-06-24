@@ -6,19 +6,30 @@
 
 ---
 
-## Швидкий старт
+## Швидкий старт (Windows — vtracer потребує Python 3.12)
 
-```bash
-# 1. Залежності
-pip install -r requirements.txt
+```powershell
+# 1. Запуск (створить .venv з Python 3.12 і встановить залежності)
+.\run.ps1
 
-# 2. Конфіг
-cp .env.example .env
+# 2. Конфіг (один раз)
+copy .env.example .env
 # відкрий .env і встав API ключі
 
-# 3. Запуск
+# → http://127.0.0.1:5000
+```
+
+> **Не використовуйте `py app.py` на Python 3.14** — vtracer падає (native crash).
+> Завжди запускайте через `.\run.ps1` або `.venv\Scripts\python.exe app.py`.
+
+Linux/macOS:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
 python app.py
-# → http://localhost:5000
 ```
 
 ---

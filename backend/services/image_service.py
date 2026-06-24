@@ -2,15 +2,15 @@
 ImageService — Pillow-фільтри для унікалізації + vtracer векторизація.
 """
 import hashlib
+import io
 import logging
 import os
 import subprocess
 import sys
 
 import numpy as np
-from PIL import Image, ImageEnhance
-from reportlab.graphics import renderPM
-from svglib.svglib import svg2rlg
+import resvg_py
+from PIL import Image, ImageEnhance, ImageFilter
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +61,57 @@ class ImageService:
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         img.save(output_path, "PNG")
 
+    def apply_threed_postprocess(self, input_path: str, output_path: str):
+        """
+        Post-process after FLUX 3D: uniquify filters, resize, noise,
+        blur/sharpen, JPEG round-trip, strip metadata (fresh PNG).
+        """
+        with open(input_path, "rb") as f:
+            raw = f.read()
+        seed = int(hashlib.md5(raw).hexdigest()[:8], 16)
+
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+
+        img = ImageEnhance.Color(img).enhance(0.96 + (seed % 9) * 0.01)
+        img = ImageEnhance.Contrast(img).enhance(0.97 + (seed % 7) * 0.01)
+        img = ImageEnhance.Brightness(img).enhance(0.98 + (seed % 5) * 0.01)
+        img = ImageEnhance.Sharpness(img).enhance(1.0 + (seed % 6) * 0.02)
+
+        hsv = np.array(img.convert("HSV"))
+        hue_shift = ((seed % 11) - 5) * 2
+        hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + hue_shift) % 256
+        img = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
+
+        width, height = img.size
+        scale = 0.96 + (seed % 5) * 0.01
+        mid_w = max(1, int(width * scale))
+        mid_h = max(1, int(height * scale))
+        img = img.resize((mid_w, mid_h), Image.Resampling.LANCZOS)
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
+
+        rng = np.random.default_rng(seed)
+        arr = np.array(img, dtype=np.float32)
+        arr += rng.normal(0, 2.0 + (seed % 4), arr.shape)
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+        img = Image.fromarray(arr, "RGB")
+
+        img = img.filter(ImageFilter.GaussianBlur(radius=0.4 + (seed % 3) * 0.1))
+        img = ImageEnhance.Sharpness(img).enhance(1.08 + (seed % 6) * 0.02)
+
+        jpeg_buf = io.BytesIO()
+        img.save(jpeg_buf, format="JPEG", quality=82 + (seed % 12), optimize=True)
+        jpeg_buf.seek(0)
+        img = Image.open(jpeg_buf).convert("RGB")
+
+        # Fresh array → PNG without EXIF/C2PA/metadata from FLUX download
+        clean = Image.fromarray(np.array(img, dtype=np.uint8), "RGB")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        clean.save(output_path, format="PNG", optimize=True)
+
     def vectorize_with_gradient(self, input_path: str, output_path: str):
         """
         1. Векторизація через vtracer (окремий subprocess — не вбиває Flask при segfault)
-        2. Растеризація SVG → PNG (svglib + reportlab)
+        2. Растеризація SVG → PNG (resvg_py, без Cairo)
         3. Накладення радіального градієнтного фону (#E0FFFF → #40E0D0)
         """
         work_dir = os.path.dirname(output_path) or "."
@@ -136,16 +183,10 @@ class ImageService:
         bg.convert("RGB").save(output_path, "PNG")
 
     def _svg_to_png(self, svg_path: str, png_path: str, scale: float = 2.0):
-        drawing = svg2rlg(svg_path)
-        if drawing is None:
-            raise RuntimeError(f"Could not parse SVG: {svg_path}")
-
-        if scale != 1.0:
-            drawing.width *= scale
-            drawing.height *= scale
-            drawing.scale(scale, scale)
-
-        renderPM.drawToFile(drawing, png_path, fmt="PNG")
+        png_bytes = resvg_py.svg_to_bytes(svg_path=svg_path, zoom=scale)
+        os.makedirs(os.path.dirname(png_path) or ".", exist_ok=True)
+        with open(png_path, "wb") as f:
+            f.write(png_bytes)
 
     def _white_to_transparent(self, img: Image.Image, tolerance: int = 30) -> Image.Image:
         """Make near-white pixels transparent so gradient shows through."""

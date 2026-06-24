@@ -16,6 +16,7 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
       2. Optional AI variation (flux-redux) if UNIQUE_MODE != pillow
       3. Vectorize + gradient bg  → Archive 1
       4. FLUX Kontext 3D Pixar    → Archive 2
+      4b. Strong post-process on 3D (filters, resize, noise, JPEG, strip metadata)
       5. Hivedetect check on both outputs
     Then zips output into a single archive.
     """
@@ -56,6 +57,10 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             job_manager.set_step(job_id, 2)
             threed_path = os.path.join(threed_dir, f"{stem}_3d.png")
             ai.transform_3d(work_path, threed_path)
+
+            threed_tmp = os.path.join(threed_dir, f".{stem}_3d_post.png")
+            img.apply_threed_postprocess(threed_path, threed_tmp)
+            os.replace(threed_tmp, threed_path)
 
             # ── Step 5: Hivedetect check ───────────────────────────────
             job_manager.set_step(job_id, 3)
