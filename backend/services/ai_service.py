@@ -68,6 +68,11 @@ class AIService:
         self.flux_redux_guidance = config.get("FLUX_REDUX_GUIDANCE", 2.5)
         self.flux_kontext_guidance = config.get("FLUX_KONTEXT_GUIDANCE", 2.2)
 
+        self.kontext_3d_prompt = config.get("KONTEXT_3D_PROMPT", self.KONTEXT_3D_PROMPT)
+        self.legacy_unique_prompt = config.get("LEGACY_UNIQUE_PROMPT", self.LEGACY_UNIQUE_PROMPT)
+        self.legacy_pixar_prompt = config.get("LEGACY_PIXAR_PROMPT", self.LEGACY_PIXAR_PROMPT)
+        self.negative_prompt = config.get("NEGATIVE_PROMPT", self.NEGATIVE_PROMPT)
+
     @property
     def legacy_model(self) -> str:
         if self._legacy_model is None:
@@ -110,7 +115,7 @@ class AIService:
             self._run_flux_redux(input_path, output_path)
         elif self.unique_mode == "sd-img2img":
             self._run_legacy_img2img(
-                input_path, self.LEGACY_UNIQUE_PROMPT, self.strength, output_path
+                input_path, self.legacy_unique_prompt, self.strength, output_path
             )
         else:
             raise ValueError(f"uniquify() called with non-AI mode: {self.unique_mode}")
@@ -119,10 +124,10 @@ class AIService:
 
     def transform_3d(self, input_path: str, output_path: str) -> str:
         if self.threed_model == "flux-kontext-dev":
-            self._run_flux_kontext(input_path, self.KONTEXT_3D_PROMPT, output_path)
+            self._run_flux_kontext(input_path, self.kontext_3d_prompt, output_path)
         elif self.threed_model == "sd-img2img":
             self._run_legacy_img2img(
-                input_path, self.LEGACY_PIXAR_PROMPT, self.strength_3d, output_path
+                input_path, self.legacy_pixar_prompt, self.strength_3d, output_path
             )
         else:
             raise ValueError(f"Unknown THREED_MODEL: {self.threed_model}")
@@ -167,7 +172,7 @@ class AIService:
                 input={
                     "image": image_file,
                     "prompt": prompt,
-                    "negative_prompt": self.NEGATIVE_PROMPT,
+                    "negative_prompt": self.negative_prompt,
                     "prompt_strength": prompt_strength,
                     "num_inference_steps": 30,
                     "guidance_scale": 7.5,

@@ -11,14 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobManager):
-    """
-    Per image:
-      1. Filters → master.png (single source for vector + 3D)
-      2. Optional flux-redux on master (both branches still share it)
-      3. Vectorize master → vector/
-      4. 3D Pixar render OF master → 3d/
-      5. Anti-AI post-process (blend back toward master) + Hive retries
-    """
     job_manager.update_status(job_id, "processing")
 
     ai = AIService(config)
@@ -40,7 +32,6 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             filename = os.path.basename(image_path)
             stem = os.path.splitext(filename)[0]
 
-            # ── Step 1: filters → master (vector + 3D share this) ────
             job_manager.set_step(job_id, 0)
             master_path = os.path.join(output_dir, f"master_{stem}.png")
             img.apply_uniquify_filters(image_path, master_path)
@@ -50,12 +41,10 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
                 uniquified = ai.uniquify(master_path, output_dir)
                 os.replace(uniquified, master_path)
 
-            # ── Step 2: vector trace of master ───────────────────────
             job_manager.set_step(job_id, 1)
             vector_path = os.path.join(vector_dir, f"{stem}_vector.png")
             img.vectorize_with_gradient(master_path, vector_path)
 
-            # ── Step 3: 3D render of the SAME master ─────────────────
             job_manager.set_step(job_id, 2)
             threed_path = os.path.join(threed_dir, f"{stem}_3d.png")
             ai.transform_3d(master_path, threed_path)
@@ -66,7 +55,6 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             )
             os.replace(threed_tmp, threed_path)
 
-            # ── Step 4: Hive + escalating anti-AI retries ─────────────
             job_manager.set_step(job_id, 3)
             vector_score = hive.check(vector_path)
             threed_score = hive.check(threed_path)
@@ -122,4 +110,6 @@ def _zip_output(vector_dir: str, threed_dir: str, zip_path: str):
         for fname in os.listdir(vector_dir):
             zf.write(os.path.join(vector_dir, fname), arcname=f"vector/{fname}")
         for fname in os.listdir(threed_dir):
+            if fname.startswith("."):
+                continue
             zf.write(os.path.join(threed_dir, fname), arcname=f"3d/{fname}")

@@ -39,7 +39,7 @@ def _reexec_in_venv_if_needed() -> None:
 _reexec_in_venv_if_needed()
 
 from flask import Flask
-from backend.api.routes import api_bp
+from backend.api.routes import api_bp, init_app as init_routes
 from backend.utils.runtime_check import check_runtime
 from config import Config
 import logging
@@ -57,8 +57,10 @@ def create_app(config=Config):
 
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
     os.makedirs(app.config["OUTPUT_FOLDER"], exist_ok=True)
+    os.makedirs(os.path.dirname(app.config["SETTINGS_FILE"]) or ".", exist_ok=True)
 
     app.register_blueprint(api_bp)
+    init_routes(app)
 
     return app
 

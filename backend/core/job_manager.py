@@ -1,6 +1,6 @@
-import uuid
-import time
 import os
+import time
+import uuid
 from threading import Lock
 
 
@@ -19,7 +19,7 @@ class JobManager:
         with self._lock:
             self._jobs[job_id] = {
                 "job_id": job_id,
-                "status": "pending",   # pending | processing | done | error
+                "status": "pending",
                 "progress": 0,
                 "total": file_count,
                 "step_index": 0,
@@ -31,7 +31,10 @@ class JobManager:
         return job_id
 
     def get_job(self, job_id: str) -> dict | None:
-        return self._jobs.get(job_id)
+        job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        return dict(job)
 
     def update_status(self, job_id: str, status: str):
         with self._lock:
@@ -44,7 +47,6 @@ class JobManager:
                 self._jobs[job_id]["step_index"] = step_index
 
     def increment_progress(self, job_id: str, result: dict):
-        """Called after each file finishes processing."""
         with self._lock:
             job = self._jobs.get(job_id)
             if job:
@@ -83,7 +85,6 @@ class JobManager:
     def sync_all_files_from_disk(self, upload_folder: str):
         with self._lock:
             job_ids = list(self._jobs.keys())
-
         for job_id in job_ids:
             self.sync_files_from_disk(job_id, upload_folder)
 

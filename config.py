@@ -45,3 +45,6 @@ class Config:
     # Processing
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
     MAX_FILES_PER_JOB = 10  # MVP limit
+
+    # User-editable prompts (Settings tab) — stored in JSON, not .env
+    SETTINGS_FILE = os.getenv("SETTINGS_FILE", "tmp/settings.json")

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — ImageTransform{% endblock %}
+
+{% block content %}
+<span class="hidden" data-page-title="page.settings"></span>
+
+<section class="page-header">
+  <div class="page-header-text">
+    <h1 class="page-title" data-i18n="page.settings">Settings</h1>
+    <p class="page-sub" data-i18n="settings.sub">Edit AI prompts used before Replicate runs. API keys stay in .env.</p>
+  </div>
+</section>
+
+<section class="settings-grid">
+  <div class="card settings-card">
+    <div class="card-header">
+      <h2 class="card-title" data-i18n="settings.promptsTitle">AI Prompts</h2>
+    </div>
+
+    <form id="settingsForm" class="settings-form">
+      <label class="settings-field">
+        <span class="settings-label" data-i18n="settings.kontext3d">3D Pixar (FLUX Kontext)</span>
+        <span class="settings-hint" data-i18n="settings.kontext3dHint">Used for Archive 2 — 3D transform step.</span>
+        <textarea id="promptKontext3d" name="KONTEXT_3D_PROMPT" rows="5"></textarea>
+      </label>
+
+      <label class="settings-field">
+        <span class="settings-label" data-i18n="settings.legacyUnique">Legacy uniquify (SD img2img)</span>
+        <span class="settings-hint" data-i18n="settings.legacyUniqueHint">Only when UNIQUE_MODE=sd-img2img.</span>
+        <textarea id="promptLegacyUnique" name="LEGACY_UNIQUE_PROMPT" rows="3"></textarea>
+      </label>
+
+      <label class="settings-field">
+        <span class="settings-label" data-i18n="settings.legacyPixar">Legacy 3D (SD img2img)</span>
+        <span class="settings-hint" data-i18n="settings.legacyPixarHint">Only when THREED_MODEL=sd-img2img.</span>
+        <textarea id="promptLegacyPixar" name="LEGACY_PIXAR_PROMPT" rows="3"></textarea>
+      </label>
+
+      <label class="settings-field">
+        <span class="settings-label" data-i18n="settings.negative">Negative prompt (legacy img2img)</span>
+        <textarea id="promptNegative" name="NEGATIVE_PROMPT" rows="2"></textarea>
+      </label>
+
+      <p class="settings-note" data-i18n="settings.fluxReduxNote">flux-redux uniquify uses image input only — no text prompt.</p>
+
+      <div class="settings-actions">
+        <button class="btn btn-primary" type="submit" id="settingsSaveBtn">
+          <span data-i18n="settings.save">Save prompts</span>
+        </button>
+        <button class="btn btn-secondary" type="button" id="settingsResetBtn">
+          <span data-i18n="settings.reset">Reset to defaults</span>
+        </button>
+        <span class="settings-status hidden" id="settingsStatus"></span>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/settings.js"></script>
+{% endblock %}

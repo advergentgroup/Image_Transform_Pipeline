@@ -593,6 +593,70 @@ body {
   background: var(--error);
 }
 
+.settings-grid {
+  max-width: 820px;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 0 24px 24px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-hint,
+.settings-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-field textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.settings-status {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-status-ok {
+  color: var(--success);
+}
+
+.settings-status-error {
+  color: var(--error);
+}
+
 .active-meta {
   display: flex;
   align-items: center;
