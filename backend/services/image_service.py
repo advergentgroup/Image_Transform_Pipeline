@@ -10,7 +10,7 @@ import sys
 
 import numpy as np
 import resvg_py
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,9 @@ vtracer.convert_image_to_svg_py(
     sys.argv[1],
     sys.argv[2],
     colormode="color",
-    filter_speckle=4,
-    color_precision=6,
-    layer_difference=16,
+    filter_speckle=8,
+    color_precision=4,
+    layer_difference=20,
     mode="spline",
     corner_threshold=60,
     length_threshold=4.0,
@@ -33,96 +33,170 @@ vtracer.convert_image_to_svg_py(
 )
 """
 
+_VECTOR_COLORS = 6
+
 
 class ImageService:
     def __init__(self, config: dict):
         self.config = config
+        self.filter_strength = float(config.get("UNIQUIFY_FILTER_STRENGTH", "1.0"))
 
     def apply_uniquify_filters(self, input_path: str, output_path: str):
         """
-        Deterministic micro-adjustments: hue, saturation, contrast, sharpness.
-        Changes pixel fingerprint without warping faces (unlike SD img2img).
+        Visible color/noise adjustments — changes fingerprint while keeping likeness.
+        Strength scales via UNIQUIFY_FILTER_STRENGTH (default 1.0).
         """
         with open(input_path, "rb") as f:
             seed = int(hashlib.md5(f.read()).hexdigest()[:8], 16)
 
+        strength = max(0.5, self.filter_strength)
         img = Image.open(input_path).convert("RGB")
 
-        img = ImageEnhance.Color(img).enhance(0.96 + (seed % 9) * 0.01)
-        img = ImageEnhance.Contrast(img).enhance(0.97 + (seed % 7) * 0.01)
-        img = ImageEnhance.Brightness(img).enhance(0.98 + (seed % 5) * 0.01)
-        img = ImageEnhance.Sharpness(img).enhance(1.0 + (seed % 6) * 0.02)
+        color_delta = 0.04 * strength
+        contrast_delta = 0.05 * strength
+        brightness_delta = 0.04 * strength
+        sharp_delta = 0.06 * strength
+
+        img = ImageEnhance.Color(img).enhance(1.0 + ((seed % 9) - 4) * color_delta)
+        img = ImageEnhance.Contrast(img).enhance(1.0 + ((seed % 7) - 3) * contrast_delta)
+        img = ImageEnhance.Brightness(img).enhance(1.0 + ((seed % 5) - 2) * brightness_delta)
+        img = ImageEnhance.Sharpness(img).enhance(1.0 + (seed % 6) * sharp_delta)
 
         hsv = np.array(img.convert("HSV"))
-        hue_shift = ((seed % 11) - 5) * 2  # ±10°
+        hue_shift = int(((seed % 15) - 7) * 3 * strength)  # ±21° at strength 1
         hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + hue_shift) % 256
+        sat_boost = 1.0 + ((seed % 5) - 2) * 0.03 * strength
+        hsv[:, :, 1] = np.clip(hsv[:, :, 1].astype(np.float32) * sat_boost, 0, 255).astype(np.uint8)
         img = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
-
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        img.save(output_path, "PNG")
-
-    def apply_threed_postprocess(self, input_path: str, output_path: str):
-        """
-        Post-process after FLUX 3D: uniquify filters, resize, noise,
-        blur/sharpen, JPEG round-trip, strip metadata (fresh PNG).
-        """
-        with open(input_path, "rb") as f:
-            raw = f.read()
-        seed = int(hashlib.md5(raw).hexdigest()[:8], 16)
-
-        img = Image.open(io.BytesIO(raw)).convert("RGB")
-
-        img = ImageEnhance.Color(img).enhance(0.96 + (seed % 9) * 0.01)
-        img = ImageEnhance.Contrast(img).enhance(0.97 + (seed % 7) * 0.01)
-        img = ImageEnhance.Brightness(img).enhance(0.98 + (seed % 5) * 0.01)
-        img = ImageEnhance.Sharpness(img).enhance(1.0 + (seed % 6) * 0.02)
-
-        hsv = np.array(img.convert("HSV"))
-        hue_shift = ((seed % 11) - 5) * 2
-        hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + hue_shift) % 256
-        img = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
-
-        width, height = img.size
-        scale = 0.96 + (seed % 5) * 0.01
-        mid_w = max(1, int(width * scale))
-        mid_h = max(1, int(height * scale))
-        img = img.resize((mid_w, mid_h), Image.Resampling.LANCZOS)
-        img = img.resize((width, height), Image.Resampling.LANCZOS)
 
         rng = np.random.default_rng(seed)
         arr = np.array(img, dtype=np.float32)
-        arr += rng.normal(0, 2.0 + (seed % 4), arr.shape)
+        noise_sigma = 1.5 + strength * 2.5
+        arr += rng.normal(0, noise_sigma, arr.shape)
         arr = np.clip(arr, 0, 255).astype(np.uint8)
         img = Image.fromarray(arr, "RGB")
 
-        img = img.filter(ImageFilter.GaussianBlur(radius=0.4 + (seed % 3) * 0.1))
-        img = ImageEnhance.Sharpness(img).enhance(1.08 + (seed % 6) * 0.02)
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        img.save(output_path, "PNG", optimize=True)
 
-        jpeg_buf = io.BytesIO()
-        img.save(jpeg_buf, format="JPEG", quality=82 + (seed % 12), optimize=True)
-        jpeg_buf.seek(0)
-        img = Image.open(jpeg_buf).convert("RGB")
+    def apply_threed_postprocess(
+        self,
+        input_path: str,
+        output_path: str,
+        intensity: int = 1,
+        blend_source: str | None = None,
+    ):
+        """
+        Anti-AI humanize pass. blend_source (master) keeps 3D visually aligned
+        with the filtered image while disrupting AI detector fingerprints.
+        """
+        level = max(1, min(intensity, 10))
+        with open(input_path, "rb") as f:
+            raw = f.read()
+        seed = int(hashlib.md5(raw).hexdigest()[:8], 16) + level * 9973
 
-        # Fresh array → PNG without EXIF/C2PA/metadata from FLUX download
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        width, height = img.size
+        strength = self.filter_strength * (0.9 + level * 0.4)
+        rng = np.random.default_rng(seed)
+
+        # Destroy smooth AI upscaling signatures
+        shrink = 0.82 + (seed % 5) * 0.02 - level * 0.01
+        shrink = max(0.72, min(0.94, shrink))
+        small_w = max(1, int(width * shrink))
+        small_h = max(1, int(height * shrink))
+        img = img.resize((small_w, small_h), Image.Resampling.BILINEAR)
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
+
+        img = ImageEnhance.Color(img).enhance(1.0 + ((seed % 9) - 4) * 0.06 * strength)
+        img = ImageEnhance.Contrast(img).enhance(1.0 + ((seed % 7) - 3) * 0.07 * strength)
+        img = ImageEnhance.Brightness(img).enhance(1.0 + ((seed % 5) - 2) * 0.05 * strength)
+
+        hsv = np.array(img.convert("HSV"))
+        hue_shift = int(((seed % 19) - 9) * 5 * strength)
+        hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + hue_shift) % 256
+        sat = np.clip(hsv[:, :, 1].astype(np.float32) * (1.0 + ((seed % 3) - 1) * 0.04 * strength), 0, 255)
+        hsv[:, :, 1] = sat.astype(np.uint8)
+        img = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
+
+        if level >= 2:
+            img = img.filter(ImageFilter.MedianFilter(size=3))
+
+        arr = np.array(img, dtype=np.float32)
+        noise_sigma = 3.0 + level * 3.5
+        arr += rng.normal(0, noise_sigma, arr.shape)
+
+        # Luminance film grain (camera sensor look)
+        gray = arr.mean(axis=2, keepdims=True)
+        grain = rng.normal(0, 1.5 + level * 0.8, gray.shape)
+        arr += grain
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+        img = Image.fromarray(arr, "RGB")
+
+        if level >= 3:
+            shift = min(2, 1 + level // 3)
+            arr = np.array(img, dtype=np.uint8)
+            arr[:, shift:, 0] = arr[:, :-shift, 0]
+            arr[:, :-shift, 2] = arr[:, shift:, 2]
+            img = Image.fromarray(arr, "RGB")
+
+        blur_radius = 0.25 + level * 0.12
+        img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        img = ImageEnhance.Sharpness(img).enhance(1.08 + level * 0.05)
+
+        if level >= 4:
+            img = img.quantize(
+                colors=max(24, 48 - level * 2),
+                method=Image.Quantize.MEDIANCUT,
+                dither=Image.Dither.FLOYDSTEINBERG,
+            ).convert("RGB")
+
+        jpeg_quality = max(52, 90 - level * 5)
+        passes = 1 + min(level, 4)
+        for i in range(passes):
+            q = max(48, jpeg_quality - i * 3)
+            jpeg_buf = io.BytesIO()
+            img.save(jpeg_buf, format="JPEG", quality=q, optimize=True, subsampling=2)
+            jpeg_buf.seek(0)
+            img = Image.open(jpeg_buf).convert("RGB")
+
+        # Blend toward master — same character look, less pure-AI signal
+        if blend_source and os.path.isfile(blend_source):
+            master = Image.open(blend_source).convert("RGB")
+            if master.size != img.size:
+                master = master.resize(img.size, Image.Resampling.LANCZOS)
+            blend_alpha = min(0.12 + level * 0.04, 0.42)
+            img = Image.blend(img, master, blend_alpha)
+
+        if level >= 5:
+            # Vignette (natural lens falloff)
+            vignette = self._make_vignette_mask(width, height, strength=0.15 + level * 0.02)
+            arr = np.array(img, dtype=np.float32)
+            arr *= vignette[:, :, np.newaxis]
+            img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
+
         clean = Image.fromarray(np.array(img, dtype=np.uint8), "RGB")
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         clean.save(output_path, format="PNG", optimize=True)
 
     def vectorize_with_gradient(self, input_path: str, output_path: str):
         """
-        1. Векторизація через vtracer (окремий subprocess — не вбиває Flask при segfault)
-        2. Растеризація SVG → PNG (resvg_py, без Cairo)
-        3. Накладення радіального градієнтного фону (#E0FFFF → #40E0D0)
+        1. Posterize to 6 colors (Image Trace look)
+        2. vtracer → SVG → PNG
+        3. Radial gradient background (#E0FFFF → #40E0D0)
         """
         work_dir = os.path.dirname(output_path) or "."
         stem = os.path.splitext(os.path.basename(input_path))[0]
+        prep_path = os.path.join(work_dir, f".{stem}_prep.png")
         svg_path = os.path.join(work_dir, f".{stem}_vec.svg")
         raw_png_path = os.path.join(work_dir, f".{stem}_vec_raw.png")
 
         try:
-            if not self._run_vtracer_subprocess(input_path, svg_path):
-                logger.warning("vtracer failed for %s — using gradient fallback", input_path)
-                self._fallback_composite(input_path, output_path)
+            self._prepare_for_vector(input_path, prep_path)
+
+            if not self._run_vtracer_subprocess(prep_path, svg_path):
+                logger.warning("vtracer failed for %s — using stylized fallback", input_path)
+                self._fallback_composite(prep_path, output_path)
                 return
 
             self._svg_to_png(svg_path, raw_png_path, scale=2.0)
@@ -134,15 +208,28 @@ class ImageService:
             bg = self._make_radial_gradient(
                 width,
                 height,
-                center_color=(224, 255, 255),  # #E0FFFF
-                edge_color=(64, 224, 208),    # #40E0D0
+                center_color=(224, 255, 255),
+                edge_color=(64, 224, 208),
             )
             bg.paste(vec_img, (0, 0), vec_img)
             bg.convert("RGB").save(output_path, "PNG")
         finally:
-            for path in (svg_path, raw_png_path):
-                if os.path.exists(path):
+            for path in (prep_path, svg_path, raw_png_path):
+                if path and os.path.exists(path):
                     os.remove(path)
+
+    def _prepare_for_vector(self, input_path: str, output_path: str):
+        """Reduce colors before tracing so vector output differs from photo."""
+        img = Image.open(input_path).convert("RGB")
+        img = ImageOps.autocontrast(img, cutoff=1)
+        img = img.quantize(
+            colors=_VECTOR_COLORS,
+            method=Image.Quantize.MEDIANCUT,
+            dither=Image.Dither.FLOYDSTEINBERG,
+        ).convert("RGB")
+        img = ImageEnhance.Sharpness(img).enhance(1.4)
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        img.save(output_path, "PNG")
 
     def _run_vtracer_subprocess(self, input_path: str, svg_path: str) -> bool:
         """Isolate vtracer in a child process (native crash must not kill Flask)."""
@@ -170,8 +257,12 @@ class ImageService:
         return True
 
     def _fallback_composite(self, input_path: str, output_path: str):
-        """Simple composite when vtracer is unavailable (e.g. Python 3.14 on Windows)."""
-        img = Image.open(input_path).convert("RGBA")
+        """Stylized composite when vtracer is unavailable."""
+        img = Image.open(input_path).convert("RGB")
+        img = img.quantize(colors=_VECTOR_COLORS, method=Image.Quantize.MEDIANCUT).convert("RGB")
+        img = ImageEnhance.Sharpness(img).enhance(1.6)
+        img = img.convert("RGBA")
+
         width, height = img.size
         bg = self._make_radial_gradient(
             width,
@@ -219,3 +310,11 @@ class ImageService:
             ).astype(np.uint8)
 
         return Image.fromarray(img_array, "RGB")
+
+    def _make_vignette_mask(self, width: int, height: int, strength: float = 0.2) -> np.ndarray:
+        cx, cy = width / 2.0, height / 2.0
+        y, x = np.mgrid[0:height, 0:width]
+        dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+        max_dist = np.sqrt(cx**2 + cy**2)
+        t = np.clip(dist / max_dist, 0, 1)
+        return (1.0 - t * strength).astype(np.float32)

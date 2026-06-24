@@ -1,30 +1,33 @@
+import logging
 import os
 import zipfile
-from backend.services.ai_service import AIService
-from backend.services.image_service import ImageService
-from backend.services.hivedetect_service import HivedetectService
+
 from backend.core.job_manager import JobManager
+from backend.services.ai_service import AIService
+from backend.services.hivedetect_service import HivedetectService
+from backend.services.image_service import ImageService
+
+logger = logging.getLogger(__name__)
 
 
 def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobManager):
     """
-    Full processing pipeline for one job.
-    Called in background thread (MVP) or Celery task (final).
-
-    Steps per image:
-      1. Pillow filters — deterministic uniquification (no face warp)
-      2. Optional AI variation (flux-redux) if UNIQUE_MODE != pillow
-      3. Vectorize + gradient bg  → Archive 1
-      4. FLUX Kontext 3D Pixar    → Archive 2
-      4b. Strong post-process on 3D (filters, resize, noise, JPEG, strip metadata)
-      5. Hivedetect check on both outputs
-    Then zips output into a single archive.
+    Per image:
+      1. Filters → master.png (single source for vector + 3D)
+      2. Optional flux-redux on master (both branches still share it)
+      3. Vectorize master → vector/
+      4. 3D Pixar render OF master → 3d/
+      5. Anti-AI post-process (blend back toward master) + Hive retries
     """
     job_manager.update_status(job_id, "processing")
 
     ai = AIService(config)
     img = ImageService(config)
     hive = HivedetectService(config)
+
+    unique_mode = config.get("UNIQUE_MODE", "flux-redux")
+    hive_target = float(config.get("HIVEDETECT_TARGET_SCORE", 10))
+    hive_max_retries = int(config.get("HIVEDETECT_MAX_RETRIES", 8))
 
     output_dir = os.path.join(config["OUTPUT_FOLDER"], job_id)
     vector_dir = os.path.join(output_dir, "vector")
@@ -37,41 +40,67 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             filename = os.path.basename(image_path)
             stem = os.path.splitext(filename)[0]
 
-            # ── Step 1: Pillow uniquify filters (always) ───────────────
+            # ── Step 1: filters → master (vector + 3D share this) ────
             job_manager.set_step(job_id, 0)
-            filtered_path = os.path.join(output_dir, f"filtered_{filename}")
-            img.apply_uniquify_filters(image_path, filtered_path)
+            master_path = os.path.join(output_dir, f"master_{stem}.png")
+            img.apply_uniquify_filters(image_path, master_path)
 
-            # ── Step 2: Optional AI variation layer ────────────────────
-            if config.get("UNIQUE_MODE", "pillow") != "pillow":
-                work_path = ai.uniquify(filtered_path, output_dir)
-            else:
-                work_path = filtered_path
+            if unique_mode != "pillow":
+                logger.info("AI uniquify on master (%s): %s", unique_mode, filename)
+                uniquified = ai.uniquify(master_path, output_dir)
+                os.replace(uniquified, master_path)
 
-            # ── Step 3: Vectorize + gradient (Archive 1) ───────────────
+            # ── Step 2: vector trace of master ───────────────────────
             job_manager.set_step(job_id, 1)
             vector_path = os.path.join(vector_dir, f"{stem}_vector.png")
-            img.vectorize_with_gradient(work_path, vector_path)
+            img.vectorize_with_gradient(master_path, vector_path)
 
-            # ── Step 4: 3D Pixar style (Archive 2) ────────────────────
+            # ── Step 3: 3D render of the SAME master ─────────────────
             job_manager.set_step(job_id, 2)
             threed_path = os.path.join(threed_dir, f"{stem}_3d.png")
-            ai.transform_3d(work_path, threed_path)
+            ai.transform_3d(master_path, threed_path)
 
             threed_tmp = os.path.join(threed_dir, f".{stem}_3d_post.png")
-            img.apply_threed_postprocess(threed_path, threed_tmp)
+            img.apply_threed_postprocess(
+                threed_path, threed_tmp, intensity=1, blend_source=master_path
+            )
             os.replace(threed_tmp, threed_path)
 
-            # ── Step 5: Hivedetect check ───────────────────────────────
+            # ── Step 4: Hive + escalating anti-AI retries ─────────────
             job_manager.set_step(job_id, 3)
             vector_score = hive.check(vector_path)
             threed_score = hive.check(threed_path)
+
+            attempt = 1
+            while (
+                threed_score > hive_target
+                and threed_score >= 0
+                and attempt < hive_max_retries
+            ):
+                attempt += 1
+                logger.info(
+                    "3D Hive %.1f%% > %.1f%% — humanize pass %d/%d for %s",
+                    threed_score,
+                    hive_target,
+                    attempt,
+                    hive_max_retries,
+                    filename,
+                )
+                threed_tmp = os.path.join(threed_dir, f".{stem}_3d_retry.png")
+                img.apply_threed_postprocess(
+                    threed_path,
+                    threed_tmp,
+                    intensity=attempt,
+                    blend_source=master_path,
+                )
+                os.replace(threed_tmp, threed_path)
+                threed_score = hive.check(threed_path)
 
             job_manager.increment_progress(job_id, {
                 "filename": filename,
                 "vector_file": f"{stem}_vector.png",
                 "threed_file": f"{stem}_3d.png",
-                "hive_vector": vector_score,   # % AI detection (lower = more human-like)
+                "hive_vector": vector_score,
                 "hive_3d": threed_score,
             })
 
@@ -79,13 +108,12 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             if job and job["progress"] >= job["total"]:
                 job_manager.set_step(job_id, 4)
 
-        # ── Zip both archives ──────────────────────────────────────────
         job_manager.set_step(job_id, 4)
         _zip_output(vector_dir, threed_dir, os.path.join(output_dir, "output.zip"))
-
         job_manager.update_status(job_id, "done")
 
     except Exception as e:
+        logger.exception("Pipeline failed for job %s", job_id)
         job_manager.set_error(job_id, str(e))
 
 

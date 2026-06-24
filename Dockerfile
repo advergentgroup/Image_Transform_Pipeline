@@ -2,16 +2,15 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# cairosvg runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcairo2 \
-    libgdk-pixbuf-2.0-0 \
     libffi-dev \
-    shared-mime-info \
     && rm -rf /var/lib/apt/lists/*
 
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 120 --retries 10 -r requirements.txt
 
 COPY . .
 

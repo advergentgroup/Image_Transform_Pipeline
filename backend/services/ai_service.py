@@ -13,10 +13,10 @@ class AIService:
     """
 
     KONTEXT_3D_PROMPT = (
-        "Transform this cartoon character into a high-quality 3D Pixar Disney animation render. "
-        "Keep the exact same character, pose, outfit, and color palette. "
-        "Add volumetric studio lighting, subsurface skin scattering, smooth CGI materials, "
-        "soft shadows, cinematic depth, professional animated movie quality."
+        "Render this exact illustration as a 3D Pixar Disney CGI still. "
+        "Keep the identical character, face, pose, body proportions, outfit, and colors from the input. "
+        "Do not redesign or replace anything — only add 3D volume, soft studio lighting, "
+        "subsurface scattering, and smooth CGI materials. Same composition and background."
     )
 
     LEGACY_UNIQUE_PROMPT = (
@@ -66,7 +66,7 @@ class AIService:
         self.strength = config["IMG2IMG_STRENGTH"]
         self.strength_3d = config.get("IMG2IMG_3D_STRENGTH", 0.55)
         self.flux_redux_guidance = config.get("FLUX_REDUX_GUIDANCE", 2.5)
-        self.flux_kontext_guidance = config.get("FLUX_KONTEXT_GUIDANCE", 3.5)
+        self.flux_kontext_guidance = config.get("FLUX_KONTEXT_GUIDANCE", 2.2)
 
     @property
     def legacy_model(self) -> str:
@@ -103,7 +103,8 @@ class AIService:
 
     def uniquify(self, input_path: str, output_dir: str) -> str:
         """AI uniquification layer — only when UNIQUE_MODE requests it."""
-        output_path = os.path.join(output_dir, "uniquified_" + os.path.basename(input_path))
+        stem = os.path.splitext(os.path.basename(input_path))[0]
+        output_path = os.path.join(output_dir, f"uniquified_{stem}.png")
 
         if self.unique_mode == "flux-redux":
             self._run_flux_redux(input_path, output_path)
