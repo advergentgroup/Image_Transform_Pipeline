@@ -20,6 +20,9 @@ def create_app(config=Config):
     return app
 
 
+app = create_app()
+
 if __name__ == "__main__":
-    app = create_app()
-    app.run(debug=True, port=5000)
+    port = int(os.getenv("PORT", "5000"))
+    debug = os.getenv("FLASK_DEBUG", "1") == "1"
+    app.run(debug=debug, host="0.0.0.0", port=port)

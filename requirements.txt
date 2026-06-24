@@ -6,4 +6,5 @@ numpy>=1.26
 requests>=2.31
 vtracer>=0.6
 cairosvg>=2.7
+gunicorn>=22.0
 # celery[redis]   # для фінальної версії (черга 500 фото/день)
