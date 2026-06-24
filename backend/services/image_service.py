@@ -1,13 +1,14 @@
 """
-ImageService — векторизація через vtracer + радіальний градієнт фон.
+ImageService — Pillow-фільтри для унікалізації + vtracer векторизація.
 """
+import hashlib
 import logging
 import os
 import subprocess
 import sys
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance
 from reportlab.graphics import renderPM
 from svglib.svglib import svg2rlg
 
@@ -36,6 +37,29 @@ vtracer.convert_image_to_svg_py(
 class ImageService:
     def __init__(self, config: dict):
         self.config = config
+
+    def apply_uniquify_filters(self, input_path: str, output_path: str):
+        """
+        Deterministic micro-adjustments: hue, saturation, contrast, sharpness.
+        Changes pixel fingerprint without warping faces (unlike SD img2img).
+        """
+        with open(input_path, "rb") as f:
+            seed = int(hashlib.md5(f.read()).hexdigest()[:8], 16)
+
+        img = Image.open(input_path).convert("RGB")
+
+        img = ImageEnhance.Color(img).enhance(0.96 + (seed % 9) * 0.01)
+        img = ImageEnhance.Contrast(img).enhance(0.97 + (seed % 7) * 0.01)
+        img = ImageEnhance.Brightness(img).enhance(0.98 + (seed % 5) * 0.01)
+        img = ImageEnhance.Sharpness(img).enhance(1.0 + (seed % 6) * 0.02)
+
+        hsv = np.array(img.convert("HSV"))
+        hue_shift = ((seed % 11) - 5) * 2  # ±10°
+        hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + hue_shift) % 256
+        img = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
+
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        img.save(output_path, "PNG")
 
     def vectorize_with_gradient(self, input_path: str, output_path: str):
         """

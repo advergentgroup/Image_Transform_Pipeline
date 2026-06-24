@@ -12,10 +12,11 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
     Called in background thread (MVP) or Celery task (final).
 
     Steps per image:
-      1. AI img2img — subtle uniquification
-      2. Vectorize + gradient bg  → saved for Archive 1
-      3. AI 3D Pixar transform    → saved for Archive 2
-      4. Hivedetect check on both outputs
+      1. Pillow filters — deterministic uniquification (no face warp)
+      2. Optional AI variation (flux-redux) if UNIQUE_MODE != pillow
+      3. Vectorize + gradient bg  → Archive 1
+      4. FLUX Kontext 3D Pixar    → Archive 2
+      5. Hivedetect check on both outputs
     Then zips output into a single archive.
     """
     job_manager.update_status(job_id, "processing")
@@ -35,21 +36,28 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             filename = os.path.basename(image_path)
             stem = os.path.splitext(filename)[0]
 
-            # ── Step 1: AI uniquification ──────────────────────────────
+            # ── Step 1: Pillow uniquify filters (always) ───────────────
             job_manager.set_step(job_id, 0)
-            uniquified_path = ai.img2img_unique(image_path, output_dir)
+            filtered_path = os.path.join(output_dir, f"filtered_{filename}")
+            img.apply_uniquify_filters(image_path, filtered_path)
 
-            # ── Step 2: Vectorize + gradient (Archive 1) ───────────────
+            # ── Step 2: Optional AI variation layer ────────────────────
+            if config.get("UNIQUE_MODE", "pillow") != "pillow":
+                work_path = ai.uniquify(filtered_path, output_dir)
+            else:
+                work_path = filtered_path
+
+            # ── Step 3: Vectorize + gradient (Archive 1) ───────────────
             job_manager.set_step(job_id, 1)
             vector_path = os.path.join(vector_dir, f"{stem}_vector.png")
-            img.vectorize_with_gradient(uniquified_path, vector_path)
+            img.vectorize_with_gradient(work_path, vector_path)
 
-            # ── Step 3: 3D Pixar style (Archive 2) ────────────────────
+            # ── Step 4: 3D Pixar style (Archive 2) ────────────────────
             job_manager.set_step(job_id, 2)
             threed_path = os.path.join(threed_dir, f"{stem}_3d.png")
-            ai.img2img_3d(uniquified_path, threed_path)
+            ai.transform_3d(work_path, threed_path)
 
-            # ── Step 4: Hivedetect check ───────────────────────────────
+            # ── Step 5: Hivedetect check ───────────────────────────────
             job_manager.set_step(job_id, 3)
             vector_score = hive.check(vector_path)
             threed_score = hive.check(threed_path)
