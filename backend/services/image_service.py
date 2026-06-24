@@ -1,12 +1,36 @@
 """
 ImageService — векторизація через vtracer + радіальний градієнт фон.
 """
+import logging
 import os
+import subprocess
+import sys
 
-import cairosvg
 import numpy as np
-import vtracer
 from PIL import Image
+from reportlab.graphics import renderPM
+from svglib.svglib import svg2rlg
+
+logger = logging.getLogger(__name__)
+
+_VTRACER_SCRIPT = """
+import sys
+import vtracer
+
+vtracer.convert_image_to_svg_py(
+    sys.argv[1],
+    sys.argv[2],
+    colormode="color",
+    filter_speckle=4,
+    color_precision=6,
+    layer_difference=16,
+    mode="spline",
+    corner_threshold=60,
+    length_threshold=4.0,
+    splice_threshold=45,
+    path_precision=3,
+)
+"""
 
 
 class ImageService:
@@ -15,8 +39,8 @@ class ImageService:
 
     def vectorize_with_gradient(self, input_path: str, output_path: str):
         """
-        1. Векторизація через vtracer (6 кольорів, Image Trace ефект)
-        2. Растеризація SVG → PNG через cairosvg
+        1. Векторизація через vtracer (окремий subprocess — не вбиває Flask при segfault)
+        2. Растеризація SVG → PNG (svglib + reportlab)
         3. Накладення радіального градієнтного фону (#E0FFFF → #40E0D0)
         """
         work_dir = os.path.dirname(output_path) or "."
@@ -25,21 +49,12 @@ class ImageService:
         raw_png_path = os.path.join(work_dir, f".{stem}_vec_raw.png")
 
         try:
-            vtracer.convert_image_to_svg_py(
-                input_path,
-                svg_path,
-                colormode="color",
-                filter_speckle=4,
-                color_precision=6,
-                layer_difference=16,
-                mode="spline",
-                corner_threshold=60,
-                length_threshold=4.0,
-                splice_threshold=45,
-                path_precision=3,
-            )
+            if not self._run_vtracer_subprocess(input_path, svg_path):
+                logger.warning("vtracer failed for %s — using gradient fallback", input_path)
+                self._fallback_composite(input_path, output_path)
+                return
 
-            cairosvg.svg2png(url=svg_path, write_to=raw_png_path, scale=2.0)
+            self._svg_to_png(svg_path, raw_png_path, scale=2.0)
 
             vec_img = Image.open(raw_png_path).convert("RGBA")
             vec_img = self._white_to_transparent(vec_img)
@@ -57,6 +72,56 @@ class ImageService:
             for path in (svg_path, raw_png_path):
                 if os.path.exists(path):
                     os.remove(path)
+
+    def _run_vtracer_subprocess(self, input_path: str, svg_path: str) -> bool:
+        """Isolate vtracer in a child process (native crash must not kill Flask)."""
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", _VTRACER_SCRIPT, input_path, svg_path],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("vtracer timed out for %s", input_path)
+            return False
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            logger.error("vtracer exit %s for %s: %s", result.returncode, input_path, detail)
+            return False
+
+        if not os.path.isfile(svg_path):
+            logger.error("vtracer produced no SVG for %s", input_path)
+            return False
+
+        return True
+
+    def _fallback_composite(self, input_path: str, output_path: str):
+        """Simple composite when vtracer is unavailable (e.g. Python 3.14 on Windows)."""
+        img = Image.open(input_path).convert("RGBA")
+        width, height = img.size
+        bg = self._make_radial_gradient(
+            width,
+            height,
+            center_color=(224, 255, 255),
+            edge_color=(64, 224, 208),
+        )
+        bg.paste(img, (0, 0), img)
+        bg.convert("RGB").save(output_path, "PNG")
+
+    def _svg_to_png(self, svg_path: str, png_path: str, scale: float = 2.0):
+        drawing = svg2rlg(svg_path)
+        if drawing is None:
+            raise RuntimeError(f"Could not parse SVG: {svg_path}")
+
+        if scale != 1.0:
+            drawing.width *= scale
+            drawing.height *= scale
+            drawing.scale(scale, scale)
+
+        renderPM.drawToFile(drawing, png_path, fmt="PNG")
 
     def _white_to_transparent(self, img: Image.Image, tolerance: int = 30) -> Image.Image:
         """Make near-white pixels transparent so gradient shows through."""

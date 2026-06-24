@@ -634,10 +634,142 @@ body {
 }
 
 .thumb-row {
-  display: flex;
-  gap: 8px;
   margin-bottom: 16px;
+}
+
+.result-cards {
+  display: flex;
   flex-wrap: wrap;
+  gap: 10px;
+}
+
+.result-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  min-width: 210px;
+  max-width: 100%;
+  flex: 1 1 210px;
+}
+
+.result-card-done {
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+.result-card-pending {
+  opacity: 0.75;
+}
+
+.result-card-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
+  background: var(--surface-3);
+}
+
+.result-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.result-card-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-card-name {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.result-card-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.result-card-scores-pending {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.hive-score-line {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.hive-score-line.score-good { color: var(--success); }
+.hive-score-line.score-warn { color: #fb923c; }
+.hive-score-line.score-bad  { color: var(--error); }
+.hive-score-line.score-pending,
+.hive-score-line.score-failed { color: var(--text-muted); }
+
+.quality-report-wrap {
+  margin-bottom: 16px;
+}
+
+.quality-report-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.quality-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.quality-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.quality-table th,
+.quality-table td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.quality-table th {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  background: var(--surface-3);
+}
+
+.quality-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.quality-table .qr-file {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
 }
 
 .thumb {

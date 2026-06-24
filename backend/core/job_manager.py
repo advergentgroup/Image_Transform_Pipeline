@@ -22,6 +22,7 @@ class JobManager:
                 "status": "pending",   # pending | processing | done | error
                 "progress": 0,
                 "total": file_count,
+                "step_index": 0,
                 "results": [],
                 "files": [],
                 "created_at": time.time(),
@@ -36,6 +37,11 @@ class JobManager:
         with self._lock:
             if job_id in self._jobs:
                 self._jobs[job_id]["status"] = status
+
+    def set_step(self, job_id: str, step_index: int):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["step_index"] = step_index
 
     def increment_progress(self, job_id: str, result: dict):
         """Called after each file finishes processing."""
@@ -140,6 +146,7 @@ class JobManager:
             "status": job["status"],
             "progress": job["progress"],
             "total": job["total"],
+            "step_index": job.get("step_index", 0),
             "created_at": job["created_at"],
             "error": job["error"],
             "avg_hive": avg_hive,

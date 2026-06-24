@@ -22,6 +22,7 @@ const stepCurrent       = document.getElementById("stepCurrent");
 const stepCurrentLabel  = document.getElementById("stepCurrentLabel");
 const stepper           = document.getElementById("stepper");
 const doneSection       = document.getElementById("doneSection");
+const qualityReport     = document.getElementById("qualityReport");
 const dlArchive         = document.getElementById("dlArchive");
 
 const recentJobsList    = document.getElementById("recentJobsList");
@@ -261,7 +262,22 @@ async function loadActiveJob() {
 
   try {
     const jobs = await Jobs.fetchJobs();
-    const active = jobs.find(j => Jobs.isActive(j.status));
+    let active = jobs.find(j => Jobs.isActive(j.status));
+
+    if (!active) {
+      const saved = Jobs.getActiveJob();
+      if (saved?.jobId) {
+        const data = await Jobs.fetchStatus(saved.jobId);
+        if (data.status === "done") {
+          showJobDone(saved.jobId, data, data.total || saved.total);
+          Jobs.clearActiveJob();
+          return;
+        }
+        if (Jobs.isActive(data.status)) {
+          active = { job_id: saved.jobId, total: data.total || saved.total, ...data };
+        }
+      }
+    }
 
     if (!active) {
       stopPolling();
@@ -297,6 +313,10 @@ function showActivePanel(job) {
   activeJobBody?.classList.remove("hidden");
   activeJobHeader?.classList.remove("hidden");
   doneSection?.classList.add("hidden");
+  if (qualityReport) {
+    qualityReport.innerHTML = "";
+    qualityReport.classList.add("hidden");
+  }
   stepCurrent?.classList.remove("hidden");
 
   if (activeJobId) activeJobId.textContent = I18n.jobLabel(Jobs.shortId(job.job_id));
@@ -305,9 +325,9 @@ function showActivePanel(job) {
     activeJobStatus.className = "status-badge status-processing";
   }
 
-  updateProgressUI(job.progress || 0, job.total || 0);
-  Jobs.updateSidebar(job.job_id, job.progress || 0, job.total || 0, true);
-  Jobs.updateStepper(stepper, stepCurrentLabel, job.progress || 0, job.total || 0);
+  updateProgressUI(job.progress || 0, job.total || 0, job.step_index ?? 0);
+  Jobs.updateSidebar(job.job_id, job.progress || 0, job.total || 0, true, job.step_index ?? 0);
+  Jobs.updateStepper(stepper, stepCurrentLabel, job.progress || 0, job.total || 0, job.step_index ?? 0);
 
   if (resultsGrid) {
     resultsGrid.innerHTML = Jobs.renderResultThumbs(
@@ -331,6 +351,40 @@ function stopPolling() {
   }
 }
 
+function showJobDone(jobId, data, total) {
+  stopPolling();
+  setUploadEnabled(true);
+  activeJobEmpty?.classList.add("hidden");
+  activeJobBody?.classList.remove("hidden");
+  activeJobHeader?.classList.remove("hidden");
+
+  updateProgressUI(total, total, 4, true);
+  Jobs.updateStepper(stepper, stepCurrentLabel, total, total, 4, true);
+
+  if (resultsGrid) {
+    resultsGrid.innerHTML = Jobs.renderResultThumbs(
+      data.results,
+      total,
+      jobId,
+      data.files
+    );
+  }
+  if (activeJobId) activeJobId.textContent = I18n.jobLabel(Jobs.shortId(jobId));
+  if (activeJobStatus) {
+    activeJobStatus.textContent = I18n.statusLabel("done");
+    activeJobStatus.className = "status-badge status-done";
+  }
+  if (activeEta) activeEta.textContent = I18n.t("progress.complete");
+  stepCurrent?.classList.add("hidden");
+  if (qualityReport) {
+    qualityReport.innerHTML = Jobs.renderQualityReport(data.results);
+    qualityReport.classList.toggle("hidden", !data.results?.length);
+  }
+  doneSection?.classList.remove("hidden");
+  if (dlArchive) dlArchive.href = `/api/download/${jobId}`;
+  Jobs.updateSidebar(null, 0, 0, false);
+}
+
 async function pollOnce(jobId, total) {
   try {
     const data = await Jobs.fetchStatus(jobId);
@@ -351,32 +405,13 @@ async function pollOnce(jobId, total) {
     }
 
     if (data.status === "done") {
-      stopPolling();
       Jobs.clearActiveJob();
-      updateProgressUI(data.progress, t);
-      if (resultsGrid) {
-        resultsGrid.innerHTML = Jobs.renderResultThumbs(
-          data.results,
-          t,
-          jobId,
-          data.files
-        );
-      }
-      if (activeJobStatus) {
-        activeJobStatus.textContent = I18n.statusLabel("done");
-        activeJobStatus.className = "status-badge status-done";
-      }
-      if (activeEta) activeEta.textContent = I18n.t("progress.complete");
-      stepCurrent?.classList.add("hidden");
-      doneSection?.classList.remove("hidden");
-      if (dlArchive) dlArchive.href = `/api/download/${jobId}`;
-      setUploadEnabled(true);
-      Jobs.updateSidebar(null, 0, 0, false);
+      showJobDone(jobId, data, t);
       Jobs.notifyChanged();
       return;
     }
 
-    updateProgressUI(data.progress, t);
+    updateProgressUI(data.progress, t, data.step_index ?? 0);
 
     if (resultsGrid) {
       resultsGrid.innerHTML = Jobs.renderResultThumbs(
@@ -387,14 +422,14 @@ async function pollOnce(jobId, total) {
       );
     }
 
-    Jobs.updateStepper(stepper, stepCurrentLabel, data.progress, t);
-    Jobs.updateSidebar(jobId, data.progress, t, true);
+    Jobs.updateStepper(stepper, stepCurrentLabel, data.progress, t, data.step_index ?? 0);
+    Jobs.updateSidebar(jobId, data.progress, t, true, data.step_index ?? 0);
   } catch {
   }
 }
 
-function updateProgressUI(progress, total) {
-  const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
+function updateProgressUI(progress, total, stepIndex = 0, isDone = false) {
+  const pct = Jobs.progressPct(progress, total, stepIndex, isDone);
   if (progressBar) progressBar.style.width = pct + "%";
   if (progressLabel) progressLabel.textContent = I18n.progressImages(progress, total);
   if (activeProgressPct) activeProgressPct.textContent = pct + "%";

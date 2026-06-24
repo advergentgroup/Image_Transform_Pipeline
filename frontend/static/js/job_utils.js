@@ -50,13 +50,78 @@ window.Jobs = (() => {
     return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
   }
 
+  function hiveScoreClass(score) {
+    if (score == null || score < 0) return "score-warn";
+    if (score <= 12) return "score-good";
+    if (score <= 18) return "score-warn";
+    return "score-bad";
+  }
+
+  function resultRowAvg(result) {
+    const scores = [];
+    if (result.hive_vector != null && result.hive_vector >= 0) scores.push(result.hive_vector);
+    if (result.hive_3d != null && result.hive_3d >= 0) scores.push(result.hive_3d);
+    if (!scores.length) return null;
+    return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
+  }
+
+  function formatHiveScoreLine(score, label) {
+    if (score == null) {
+      return `<span class="hive-score-line score-pending">${label}: —</span>`;
+    }
+    if (score < 0) {
+      return `<span class="hive-score-line score-failed">${label}: ${I18n.t("hive.checkFailed")}</span>`;
+    }
+    const cls = hiveScoreClass(score);
+    return `<span class="hive-score-line ${cls}">${label}: ${I18n.t("job.hiveAi", { score })}</span>`;
+  }
+
+  function renderQualityCell(score) {
+    if (score == null) return `<span class="score-chip score-warn">—</span>`;
+    if (score < 0) return `<span class="score-chip score-warn">${I18n.t("hive.checkFailed")}</span>`;
+    const cls = hiveScoreClass(score);
+    return `<span class="score-chip ${cls}">${I18n.t("job.hiveAi", { score })}</span>`;
+  }
+
+  function renderQualityReport(results) {
+    if (!results?.length) return "";
+
+    const rows = results.map(r => {
+      const avg = resultRowAvg(r);
+      const name = r.filename || "—";
+      return `<tr>
+        <td class="qr-file" title="${name}">${name}</td>
+        <td>${renderQualityCell(r.hive_vector)}</td>
+        <td>${renderQualityCell(r.hive_3d)}</td>
+        <td>${renderQualityCell(avg)}</td>
+      </tr>`;
+    }).join("");
+
+    return `<div class="quality-report">
+      <h3 class="quality-report-title">${I18n.t("hive.qualityReport")}</h3>
+      <div class="quality-table-wrap">
+        <table class="quality-table">
+          <thead>
+            <tr>
+              <th>${I18n.t("hive.colFile")}</th>
+              <th>${I18n.t("hive.colVector")}</th>
+              <th>${I18n.t("hive.col3d")}</th>
+              <th>${I18n.t("hive.colAvg")}</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
   function hiveChip(job) {
     const score = avgHive(job);
     const ui = uiStatus(job.status);
     if (ui === "processing" || score == null) {
       return `<span class="score-chip score-warn">—</span>`;
     }
-    const cls = score <= 12 ? "score-good" : score <= 18 ? "score-warn" : "score-bad";
+    const cls = hiveScoreClass(score);
     return `<span class="score-chip ${cls}">${I18n.t("job.hiveAi", { score })}</span>`;
   }
 
@@ -130,30 +195,57 @@ window.Jobs = (() => {
       : (results || []).map(r => r.filename).filter(Boolean);
     if (!pool.length) return "";
 
-    const doneCount = results?.length || 0;
-    const maxVisible = 5;
-    const visible = pool.slice(0, maxVisible);
+    const resultByFile = {};
+    (results || []).forEach(r => {
+      if (r.filename) resultByFile[r.filename] = r;
+    });
 
-    const thumbs = visible.map((name, i) => {
-      const done = i < doneCount;
-      const cls = done ? "thumb thumb-result" : "thumb thumb-pending";
-      return `<div class="${cls}" title="${name}"><img src="${fileUrl(jobId, name)}" alt="" loading="lazy" /></div>`;
+    const vectorLabel = I18n.t("hive.vector");
+    const threedLabel = I18n.t("hive.threed");
+
+    const cards = pool.map(name => {
+      const result = resultByFile[name];
+      const done = !!result;
+      const cardCls = done ? "result-card result-card-done" : "result-card result-card-pending";
+      const scoresHtml = done
+        ? `<div class="result-card-scores">
+            ${formatHiveScoreLine(result.hive_vector, vectorLabel)}
+            ${formatHiveScoreLine(result.hive_3d, threedLabel)}
+          </div>`
+        : `<div class="result-card-scores result-card-scores-pending">${I18n.t("hive.pending")}</div>`;
+
+      return `<div class="${cardCls}">
+        <div class="result-card-thumb">
+          <img src="${fileUrl(jobId, name)}" alt="" loading="lazy" />
+        </div>
+        <div class="result-card-meta">
+          <span class="result-card-name" title="${name}">${name}</span>
+          ${scoresHtml}
+        </div>
+      </div>`;
     }).join("");
 
-    const remaining = Math.max(0, (total || pool.length) - maxVisible);
-    const more = remaining > 0 ? `<div class="thumb thumb-more">+${remaining}</div>` : "";
-    return thumbs + more;
+    return `<div class="result-cards">${cards}</div>`;
   }
 
-  function updateStepper(stepper, stepCurrentLabel, progress, total) {
+  function progressPct(progress, total, stepIndex = 0, isDone = false) {
+    if (!total || total <= 0) return 0;
+    if (isDone) return 100;
+    const unitsDone = progress * 4 + Math.min(4, Math.max(0, stepIndex));
+    return Math.min(99, Math.round(unitsDone / (total * 4) * 100));
+  }
+
+  function updateStepper(stepper, stepCurrentLabel, progress, total, stepIndex, isDone = false) {
     if (!stepper || !stepCurrentLabel) return;
 
     const steps = stepper.querySelectorAll(".step");
     const lines = stepper.querySelectorAll(".step-line");
 
     let activeIdx = 0;
-    if (progress >= total && total > 0) {
+    if (isDone) {
       activeIdx = 4;
+    } else if (typeof stepIndex === "number") {
+      activeIdx = Math.min(4, Math.max(0, stepIndex));
     } else if (progress > 0) {
       activeIdx = Math.min(3, Math.floor((progress / total) * 4) + 1);
     }
@@ -189,7 +281,7 @@ window.Jobs = (() => {
     lines.forEach((line, i) => line.classList.toggle("done", i < activeIdx));
   }
 
-  function updateSidebar(jobId, progress, total, visible) {
+  function updateSidebar(jobId, progress, total, visible, stepIndex = 0, isDone = false) {
     const sidebar = document.getElementById("sidebarJob");
     const title = document.getElementById("sidebarJobTitle");
     const meta = document.getElementById("sidebarJobMeta");
@@ -204,7 +296,7 @@ window.Jobs = (() => {
     sidebar.classList.remove("hidden");
     if (title) title.textContent = I18n.jobLabel(shortId(jobId));
     if (meta) meta.textContent = I18n.progressImages(progress, total);
-    if (bar) bar.style.width = (total > 0 ? Math.round(progress / total * 100) : 0) + "%";
+    if (bar) bar.style.width = progressPct(progress, total, stepIndex, isDone) + "%";
   }
 
   async function fetchJobs() {
@@ -316,11 +408,15 @@ window.Jobs = (() => {
     statusBadge,
     formatDate,
     avgHive,
+    hiveScoreClass,
+    resultRowAvg,
     hiveChip,
+    renderQualityReport,
     renderHistoryRow,
     renderRecentItem,
     renderResultThumbs,
     renderActions,
+    progressPct,
     updateStepper,
     updateSidebar,
     fetchJobs,

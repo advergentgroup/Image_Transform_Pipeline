@@ -21,6 +21,7 @@ const stepCurrentLabel = document.getElementById("stepCurrentLabel");
 const stepper        = document.getElementById("stepper");
 
 const doneSection    = document.getElementById("doneSection");
+const qualityReport  = document.getElementById("qualityReport");
 const dlArchive      = document.getElementById("dlArchive");
 const retryJobBtn    = document.getElementById("retryJobBtn");
 
@@ -29,6 +30,7 @@ let pollingTimer  = null;
 let jobStartTime  = null;
 let previewUrls   = [];
 let currentJobId  = null;
+let currentJobTotal = 0;
 let currentJobFiles = [];
 
 browseBtn.addEventListener("click", e => {
@@ -183,6 +185,7 @@ processBtn.addEventListener("click", async e => {
 
 function showProgress(jobId, total, initial) {
   currentJobId = jobId;
+  currentJobTotal = total;
   currentJobFiles = initial?.files?.length
     ? initial.files
     : selectedFiles.map(f => f.name);
@@ -202,24 +205,28 @@ function showProgress(jobId, total, initial) {
   activeJobStatus.textContent = I18n.statusLabel("processing");
   activeJobStatus.className = "status-badge status-processing";
   doneSection.classList.add("hidden");
+  if (qualityReport) {
+    qualityReport.innerHTML = "";
+    qualityReport.classList.add("hidden");
+  }
   stepCurrent.classList.remove("hidden");
 
   const progress = initial?.progress || 0;
   const results = initial?.results || [];
 
-  updateProgressUI(progress, total);
+  updateProgressUI(progress, total, initial?.step_index ?? 0);
   renderResults(results, total, currentJobFiles);
-  updateStepper(progress, total);
+  Jobs.updateStepper(stepper, stepCurrentLabel, progress, total, initial?.step_index ?? 0);
   Jobs.updateSidebar(jobId, progress, total, true);
 
   stopPolling();
   pollingTimer = setInterval(() => pollStatus(jobId, total), 2000);
 }
 
-function updateProgressUI(progress, total) {
-  const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
+function updateProgressUI(progress, total, stepIndex = 0, isDone = false) {
+  const pct = Jobs.progressPct(progress, total, stepIndex, isDone);
   progressBar.style.width = pct + "%";
-  if (currentJobId) Jobs.updateSidebar(currentJobId, progress, total, true);
+  if (currentJobId) Jobs.updateSidebar(currentJobId, progress, total, true, stepIndex, isDone);
   progressLabel.textContent = I18n.progressImages(progress, total);
   activeProgressPct.textContent = pct + "%";
 
@@ -237,53 +244,6 @@ function updateProgressUI(progress, total) {
   }
 }
 
-function animateStepLabel(el, text) {
-  if (!el || el.textContent === text) return;
-  el.classList.remove("is-changing");
-  void el.offsetWidth;
-  el.textContent = text;
-  el.classList.add("is-changing");
-}
-
-function updateStepper(progress, total) {
-  const steps = stepper.querySelectorAll(".step");
-  const lines = stepper.querySelectorAll(".step-line");
-
-  let activeIdx = 0;
-  if (progress >= total && total > 0) {
-    activeIdx = 4;
-  } else if (progress > 0) {
-    const ratio = progress / total;
-    activeIdx = Math.min(3, Math.floor(ratio * 4) + 1);
-  }
-
-  animateStepLabel(stepCurrentLabel, I18n.step(activeIdx));
-
-  steps.forEach((step, i) => {
-    step.classList.remove("done", "active");
-    const dot = step.querySelector(".step-dot");
-    if (i < activeIdx) {
-      step.classList.add("done");
-      if (dot && !dot.querySelector("svg")) {
-        dot.innerHTML = '<svg viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4.5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-      }
-    } else if (i === activeIdx) {
-      step.classList.add("active");
-      if (dot) {
-        dot.innerHTML = "";
-        dot.className = "step-dot step-dot-glow";
-      }
-    } else if (dot) {
-      dot.className = "step-dot";
-      dot.innerHTML = "";
-    }
-  });
-
-  lines.forEach((line, i) => {
-    line.classList.toggle("done", i < activeIdx);
-  });
-}
-
 async function pollStatus(jobId, total) {
   try {
     const res  = await fetch(`/api/status/${jobId}`);
@@ -298,16 +258,15 @@ async function pollStatus(jobId, total) {
 
     if (data.status === "done") {
       stopPolling();
-      updateProgressUI(data.progress, total);
       renderResults(data.results, total, data.files);
-      showDone(jobId);
+      showDone(jobId, total, data.results);
       Jobs.notifyChanged();
       return;
     }
 
-    updateProgressUI(data.progress, total);
+    updateProgressUI(data.progress, total, data.step_index ?? 0);
     renderResults(data.results, total, data.files);
-    updateStepper(data.progress, total);
+    Jobs.updateStepper(stepper, stepCurrentLabel, data.progress, total, data.step_index ?? 0);
 
   } catch {
   }
@@ -334,13 +293,18 @@ function renderResults(results, total, files) {
   );
 }
 
-function showDone(jobId) {
+function showDone(jobId, total, results) {
   Jobs.clearActiveJob();
   activeJobStatus.textContent = I18n.statusLabel("done");
   activeJobStatus.className = "status-badge status-done";
   activeEta.textContent = I18n.t("progress.complete");
+  updateProgressUI(total, total, 4, true);
+  Jobs.updateStepper(stepper, stepCurrentLabel, total, total, 4, true);
   stepCurrent.classList.add("hidden");
-  updateStepper(999, 1);
+  if (qualityReport) {
+    qualityReport.innerHTML = Jobs.renderQualityReport(results);
+    qualityReport.classList.toggle("hidden", !results?.length);
+  }
   doneSection.classList.remove("hidden");
   dlArchive.href = `/api/download/${jobId}`;
   Jobs.updateSidebar(null, 0, 0, false);
@@ -368,12 +332,11 @@ async function resumeActiveJob() {
     }
 
     if (data.status === "done") {
-      Jobs.clearActiveJob();
       progressCard.classList.remove("hidden");
       activeJobId.textContent = I18n.jobLabel(Jobs.shortId(saved.jobId));
-      updateProgressUI(data.progress, total);
+      updateProgressUI(data.progress, total, 4, true);
       renderResults(data.results, total, data.files);
-      showDone(saved.jobId);
+      showDone(saved.jobId, total, data.results);
       return;
     }
 
