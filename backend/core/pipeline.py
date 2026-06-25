@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobManager):
     """
     Per image:
-      - Vector: original → 16-color posterize + gradient (no noise filters)
-      - 3D: original → FLUX Kontext (clean input) → metadata strip only
-      - Hive: report score, never destroy 3D quality with retry passes
+      - Vector: posterize 16-color + gradient
+      - 3D: FLUX Kontext (real 3D render) — default
+      - 3D pseudo3d: optional flat shading mode (passes Hive, not real 3D)
     """
     job_manager.update_status(job_id, "processing")
 
@@ -24,6 +24,7 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
     hive = HivedetectService(config)
 
     unique_mode = config.get("UNIQUE_MODE", "pillow")
+    threed_mode = str(config.get("THREED_MODE", "kontext")).lower()
 
     output_dir = os.path.join(config["OUTPUT_FOLDER"], job_id)
     vector_dir = os.path.join(output_dir, "vector")
@@ -36,22 +37,24 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             filename = os.path.basename(image_path)
             stem = os.path.splitext(filename)[0]
 
-            # Optional uniquify layer (off by default — pillow skips)
             source_path = image_path
             if unique_mode != "pillow":
                 job_manager.set_step(job_id, 0)
                 logger.info("AI uniquify (%s): %s", unique_mode, filename)
                 source_path = ai.uniquify(image_path, output_dir)
 
-            # ── Vector: clean trace from source (original by default) ──
             job_manager.set_step(job_id, 1)
             vector_path = os.path.join(vector_dir, f"{stem}_vector.png")
             img.vectorize_with_gradient(source_path, vector_path)
 
-            # ── 3D: same source, no filter noise ───────────────────────
             job_manager.set_step(job_id, 2)
             threed_path = os.path.join(threed_dir, f"{stem}_3d.png")
-            ai.transform_3d(source_path, threed_path)
+
+            if threed_mode == "pseudo3d":
+                posterized = img._prepare_posterized(source_path)
+                img.render_pseudo_3d(posterized, threed_path)
+            else:
+                ai.transform_3d(source_path, threed_path)
 
             threed_tmp = os.path.join(threed_dir, f".{stem}_3d_clean.png")
             img.strip_image_metadata(threed_path, threed_tmp)

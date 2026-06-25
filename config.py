@@ -16,6 +16,8 @@ class Config:
     REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
     UNIQUE_MODE = os.getenv("UNIQUE_MODE", "pillow")
     UNIQUIFY_FILTER_STRENGTH = float(os.getenv("UNIQUIFY_FILTER_STRENGTH", "1.0"))
+    # kontext = real FLUX 3D (default) | pseudo3d = flat Hive-safe fallback only
+    THREED_MODE = os.getenv("THREED_MODE", "kontext")
     THREED_MODEL = os.getenv("THREED_MODEL", "flux-kontext-pro")
 
     FLUX_REDUX_MODEL = os.getenv("FLUX_REDUX_MODEL", "black-forest-labs/flux-redux-dev")
