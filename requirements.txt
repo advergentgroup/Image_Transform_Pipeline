@@ -3,6 +3,7 @@ python-dotenv>=1.0
 replicate>=0.25
 Pillow>=10.0
 numpy>=1.26
+scipy>=1.11
 requests>=2.31
 vtracer>=0.6
 resvg_py>=0.3.3

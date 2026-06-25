@@ -14,8 +14,8 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
     """
     Per image:
       - Vector: posterize 16-color + gradient
-      - 3D: FLUX Kontext (real 3D render) — default
-      - 3D pseudo3d: optional flat shading mode (passes Hive, not real 3D)
+      - 3D: FLUX Kontext (real Pixar-style render)
+      - Hive: score report on both outputs
     """
     job_manager.update_status(job_id, "processing")
 
@@ -50,14 +50,35 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             job_manager.set_step(job_id, 2)
             threed_path = os.path.join(threed_dir, f"{stem}_3d.png")
 
-            if threed_mode == "pseudo3d":
+            if threed_mode == "depth-guided":
                 posterized = img._prepare_posterized(source_path)
-                img.render_pseudo_3d(posterized, threed_path)
+                kontext_ref = os.path.join(threed_dir, f".{stem}_kontext_ref.png")
+                ai.transform_3d(source_path, kontext_ref)
+                img.render_depth_guided_3d(
+                    posterized,
+                    kontext_ref,
+                    threed_path,
+                    strength=float(config.get("DEPTH_GUIDED_STRENGTH", "1.15")),
+                    light_grid=int(config.get("DEPTH_GUIDED_GRID", "32")),
+                    white_background=str(config.get("THREED_WHITE_BACKGROUND", "0")).lower()
+                    in ("1", "true", "yes"),
+                )
+                if os.path.isfile(kontext_ref):
+                    os.remove(kontext_ref)
             else:
                 ai.transform_3d(source_path, threed_path)
 
-            threed_tmp = os.path.join(threed_dir, f".{stem}_3d_clean.png")
-            img.strip_image_metadata(threed_path, threed_tmp)
+            # Humanize 3D output to pass Hive < 10%.
+            # Layers: blur+resharpen, organic mid-tone grain, JPEG round-trip,
+            # chromatic aberration, block micro-warp, source blend.
+            threed_tmp = os.path.join(threed_dir, f".{stem}_3d_humanized.png")
+            hive_intensity = int(config.get("HIVEDETECT_HUMANIZE_INTENSITY", "5"))
+            img.apply_threed_postprocess(
+                threed_path,
+                threed_tmp,
+                intensity=hive_intensity,
+                blend_source=source_path,
+            )
             os.replace(threed_tmp, threed_path)
 
             job_manager.set_step(job_id, 3)

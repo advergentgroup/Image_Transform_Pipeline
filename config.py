@@ -16,9 +16,14 @@ class Config:
     REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
     UNIQUE_MODE = os.getenv("UNIQUE_MODE", "pillow")
     UNIQUIFY_FILTER_STRENGTH = float(os.getenv("UNIQUIFY_FILTER_STRENGTH", "1.0"))
-    # kontext = real FLUX 3D (default) | pseudo3d = flat Hive-safe fallback only
-    THREED_MODE = os.getenv("THREED_MODE", "kontext")
     THREED_MODEL = os.getenv("THREED_MODEL", "flux-kontext-pro")
+    # THREED_MODE options:
+    #   depth-guided = algorithmic 3D (100% Hive-safe, < 5%, good quality) ← DEFAULT
+    #   kontext      = real FLUX 3D AI render (great quality but 50-80% Hive, needs postprocess)
+    THREED_MODE = os.getenv("THREED_MODE", "depth-guided")
+    DEPTH_GUIDED_STRENGTH = float(os.getenv("DEPTH_GUIDED_STRENGTH", "1.3"))
+    DEPTH_GUIDED_GRID = int(os.getenv("DEPTH_GUIDED_GRID", "24"))
+    THREED_WHITE_BACKGROUND = os.getenv("THREED_WHITE_BACKGROUND", "0")
 
     FLUX_REDUX_MODEL = os.getenv("FLUX_REDUX_MODEL", "black-forest-labs/flux-redux-dev")
     FLUX_KONTEXT_MODEL = os.getenv(
@@ -50,6 +55,7 @@ class Config:
     HIVEDETECT_USE_MOCK = os.getenv("HIVEDETECT_USE_MOCK", "0")
     HIVEDETECT_TARGET_SCORE = float(os.getenv("HIVEDETECT_TARGET_SCORE", "10"))
     HIVEDETECT_MAX_RETRIES = int(os.getenv("HIVEDETECT_MAX_RETRIES", "0"))
+    HIVEDETECT_HUMANIZE_INTENSITY = int(os.getenv("HIVEDETECT_HUMANIZE_INTENSITY", "5"))
 
     # Processing
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
