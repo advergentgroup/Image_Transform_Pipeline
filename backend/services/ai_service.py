@@ -13,10 +13,17 @@ class AIService:
     """
 
     KONTEXT_3D_PROMPT = (
-        "Render this exact illustration as a 3D Pixar Disney CGI still. "
-        "Keep the identical character, face, pose, body proportions, outfit, and colors from the input. "
-        "Do not redesign or replace anything — only add 3D volume, soft studio lighting, "
-        "subsurface scattering, and smooth CGI materials. Same composition and background."
+        "Transform the uploaded 2D character/image into a high-quality 3D render while "
+        "preserving the original design exactly. Keep the same character identity, pose, "
+        "proportions, silhouette, facial expression, colors, clothing/accessories, composition, "
+        "camera angle, and background. Do not add, remove, or redesign any elements. Convert only "
+        "the visual depth, lighting, materials, and surface volume from flat 2D into polished 3D. "
+        "Create a clean professional 3D cartoon-style render with soft rounded forms, smooth surfaces, "
+        "subtle realistic shading, gentle ambient occlusion, soft studio lighting, and a slightly "
+        "glossy toy-like finish. Maintain the original color palette and all details exactly as in "
+        "the reference image. The result should look like the same image recreated as a 3D character "
+        "render, centered, clean, high-resolution, crisp edges, professional character art, white or "
+        "original background preserved."
     )
 
     LEGACY_UNIQUE_PROMPT = (
@@ -57,7 +64,7 @@ class AIService:
         os.environ["REPLICATE_API_TOKEN"] = token
         self.config = config
         self.unique_mode = config.get("UNIQUE_MODE", "pillow")
-        self.threed_model = config.get("THREED_MODEL", "flux-kontext-dev")
+        self.threed_model = config.get("THREED_MODEL", "flux-kontext-pro")
 
         self._legacy_model = None
         self._flux_redux_model = None
@@ -66,7 +73,8 @@ class AIService:
         self.strength = config["IMG2IMG_STRENGTH"]
         self.strength_3d = config.get("IMG2IMG_3D_STRENGTH", 0.55)
         self.flux_redux_guidance = config.get("FLUX_REDUX_GUIDANCE", 2.5)
-        self.flux_kontext_guidance = config.get("FLUX_KONTEXT_GUIDANCE", 2.2)
+        self.flux_kontext_guidance = config.get("FLUX_KONTEXT_GUIDANCE", 2.5)
+        self.flux_kontext_steps = int(config.get("FLUX_KONTEXT_STEPS", 28))
 
         self.kontext_3d_prompt = config.get("KONTEXT_3D_PROMPT", self.KONTEXT_3D_PROMPT)
         self.legacy_unique_prompt = config.get("LEGACY_UNIQUE_PROMPT", self.LEGACY_UNIQUE_PROMPT)
@@ -91,7 +99,9 @@ class AIService:
     def flux_kontext_model(self) -> str:
         if self._flux_kontext_model is None:
             self._flux_kontext_model = self._resolve_model(
-                self.config.get("FLUX_KONTEXT_MODEL", "black-forest-labs/flux-kontext-dev")
+                self.config.get(
+                    "FLUX_KONTEXT_MODEL", "black-forest-labs/flux-kontext-pro"
+                )
             )
         return self._flux_kontext_model
 
@@ -123,7 +133,7 @@ class AIService:
         return output_path
 
     def transform_3d(self, input_path: str, output_path: str) -> str:
-        if self.threed_model == "flux-kontext-dev":
+        if self.threed_model.startswith("flux-kontext"):
             self._run_flux_kontext(input_path, self.kontext_3d_prompt, output_path)
         elif self.threed_model == "sd-img2img":
             self._run_legacy_img2img(
@@ -157,7 +167,7 @@ class AIService:
                     "input_image": image_file,
                     "aspect_ratio": "match_input_image",
                     "guidance": self.flux_kontext_guidance,
-                    "num_inference_steps": 30,
+                    "num_inference_steps": self.flux_kontext_steps,
                     "output_format": "png",
                 },
             )

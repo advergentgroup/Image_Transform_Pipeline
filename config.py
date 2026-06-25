@@ -14,14 +14,21 @@ class Config:
 
     # AI — uniquify: pillow (filters only) | flux-redux (recommended) | sd-img2img (legacy)
     REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
-    UNIQUE_MODE = os.getenv("UNIQUE_MODE", "flux-redux")
+    UNIQUE_MODE = os.getenv("UNIQUE_MODE", "pillow")
     UNIQUIFY_FILTER_STRENGTH = float(os.getenv("UNIQUIFY_FILTER_STRENGTH", "1.0"))
-    THREED_MODEL = os.getenv("THREED_MODEL", "flux-kontext-dev")
+    THREED_MODEL = os.getenv("THREED_MODEL", "flux-kontext-pro")
 
     FLUX_REDUX_MODEL = os.getenv("FLUX_REDUX_MODEL", "black-forest-labs/flux-redux-dev")
-    FLUX_KONTEXT_MODEL = os.getenv("FLUX_KONTEXT_MODEL", "black-forest-labs/flux-kontext-dev")
+    FLUX_KONTEXT_MODEL = os.getenv(
+        "FLUX_KONTEXT_MODEL", "black-forest-labs/flux-kontext-pro"
+    )
     FLUX_REDUX_GUIDANCE = float(os.getenv("FLUX_REDUX_GUIDANCE", "2.5"))
-    FLUX_KONTEXT_GUIDANCE = float(os.getenv("FLUX_KONTEXT_GUIDANCE", "2.2"))
+    FLUX_KONTEXT_GUIDANCE = float(os.getenv("FLUX_KONTEXT_GUIDANCE", "2.5"))
+    FLUX_KONTEXT_STEPS = int(os.getenv("FLUX_KONTEXT_STEPS", "28"))
+
+    VECTOR_MODE = os.getenv("VECTOR_MODE", "posterize")
+    VECTOR_TRACE_COLORS = int(os.getenv("VECTOR_TRACE_COLORS", "16"))
+    VECTOR_TRACE_NOISE = int(os.getenv("VECTOR_TRACE_NOISE", "4"))
 
     # Legacy SD 1.5 img2img (poor quality for cartoons — avoid unless testing)
     IMG2IMG_MODEL = os.getenv(
@@ -40,7 +47,7 @@ class Config:
     )
     HIVEDETECT_USE_MOCK = os.getenv("HIVEDETECT_USE_MOCK", "0")
     HIVEDETECT_TARGET_SCORE = float(os.getenv("HIVEDETECT_TARGET_SCORE", "10"))
-    HIVEDETECT_MAX_RETRIES = int(os.getenv("HIVEDETECT_MAX_RETRIES", "8"))
+    HIVEDETECT_MAX_RETRIES = int(os.getenv("HIVEDETECT_MAX_RETRIES", "0"))
 
     # Processing
     ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
