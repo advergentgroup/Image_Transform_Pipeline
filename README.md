@@ -1,8 +1,8 @@
 # 🎨 Image Transform Pipeline — MVP
 
-Веб-додаток: завантажуєш мультяшні JPG/PNG → отримуєш 2 ZIP архіви.
-- **Архів 1** — векторний стиль (Image Trace + градієнт фон)
-- **Архів 2** — 3D Pixar стиль
+Веб-додаток: завантажуєш мультяшні JPG/PNG → отримуєш ZIP з `vector/` та `3d/`.
+
+**Repo:** https://github.com/NazarFedus/Image_Transform_Pipeline_WEB
 
 ---
 
