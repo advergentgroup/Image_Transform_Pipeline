@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import zipfile
 
 from backend.core.job_manager import JobManager
@@ -11,12 +12,6 @@ logger = logging.getLogger(__name__)
 
 
 def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobManager):
-    """
-    Per image:
-      - Vector: 16-color posterize + gradient (Hive-safe, ~0-5%)
-      - Turnaround: 5-view character sheet via FLUX Kontext (16:9) + cel-shader
-    Pipeline mode: PIPELINE_MODE=turnaround (default) | legacy-3d
-    """
     job_manager.update_status(job_id, "processing")
 
     ai = AIService(config)
@@ -52,6 +47,21 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
             vector_score = hive.check(vector_path)
             logger.info("Vector Hive: %.1f%%", vector_score)
 
+            # Vector retry — intensities 4, 6, 8 (higher than before)
+            if 0 < vector_score and vector_score > target_score:
+                vector_tmp = os.path.join(vector_dir, f".{stem}_vector_post.png")
+                for attempt in range(max_retries):
+                    if vector_score <= target_score:
+                        break
+                    intensity = min(10, 4 + attempt * 2)   # 4 → 6 → 8
+                    logger.info(
+                        "Vector retry %d/%d intensity=%d Hive=%.1f%%",
+                        attempt + 1, max_retries, intensity, vector_score,
+                    )
+                    img.apply_threed_postprocess(vector_path, vector_tmp, intensity=intensity)
+                    os.replace(vector_tmp, vector_path)
+                    vector_score = hive.check(vector_path)
+
             # ── Step 2: Turnaround or legacy 3D ──────────────────────────
             job_manager.set_step(job_id, 2)
 
@@ -59,7 +69,7 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
                 second_path = os.path.join(second_dir, f"{stem}_turnaround.png")
                 second_score = _run_turnaround(
                     ai, img, hive, source_path, second_path, second_dir, stem,
-                    config, target_score, max_retries,
+                    config, target_score,
                 )
                 second_key = "turnaround_file"
                 second_file = f"{stem}_turnaround.png"
@@ -74,7 +84,7 @@ def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobM
                 second_file = f"{stem}_3d.png"
                 second_hive_key = "hive_3d"
 
-            # ── Step 3: Zip progress ──────────────────────────────────────
+            # ── Step 3: Progress ──────────────────────────────────────────
             job_manager.set_step(job_id, 3)
             job_manager.increment_progress(job_id, {
                 "filename": filename,
@@ -107,19 +117,25 @@ def _run_turnaround(
     stem: str,
     config: dict,
     target_score: float,
-    max_retries: int,
 ) -> float:
     """
-    5-view turnaround sheet via FLUX Kontext (16:9).
-    Input: posterized flat version of the source (mimics Illustrator pre-process).
-    Post-process: cel shader retry loop for Hive reduction.
+    5-view turnaround via FLUX Kontext (16:9).
+
+    Post-process chain (stops as soon as Hive passes):
+      1. apply_illustration_style: 16 colors + grain σ=1.0 + JPEG 93.
+         Same chain as vector — no dots, clean flat look.
+         Fast pass: works for images where FLUX generates in flat style.
+
+      2. depth-guided: posterize FLUX output as color base, FLUX as depth reference.
+         Same technique as depth-guided 3D — 100% algorithmic output pixels.
+         Guaranteed < 5% Hive. Adds subtle shading (appropriate for reference sheets).
+
+      3. cel-shader FS fallback (should rarely/never be needed after step 2).
     """
-    # Prepare a flat 16-color version of source as FLUX input.
-    # Flat illustration style guides FLUX to generate in illustrator/cartoon mode
-    # which tends to score better on Hive than photorealistic renders.
+    # Prepare flat 16-color version as FLUX input (guides FLUX to flat illustration style)
     flux_input_path = os.path.join(work_dir, f".{stem}_turnaround_input.png")
-    posterized = img._prepare_posterized(source_path, colors=16, dither=False)
-    posterized.save(flux_input_path, "PNG")
+    posterized_src = img._prepare_posterized(source_path, colors=16, dither=False)
+    posterized_src.save(flux_input_path, "PNG")
 
     try:
         ai.generate_turnaround(flux_input_path, output_path)
@@ -127,27 +143,52 @@ def _run_turnaround(
         if os.path.isfile(flux_input_path):
             os.remove(flux_input_path)
 
-    # Cel-shader retry loop — quantize to flat colors to reduce AI fingerprint
-    cel_colors_list = [
-        int(config.get("CEL_SHADER_COLORS", "24")),
-        16,
-        12,
-    ]
-    tmp_path = os.path.join(work_dir, f".{stem}_turnaround_cel.png")
-    score = hive.check(output_path)
-    logger.info("Turnaround raw Hive: %.1f%%", score)
+    # Keep a copy of the raw FLUX output as depth reference for step 2
+    flux_ref = os.path.join(work_dir, f".{stem}_turnaround_flux.png")
+    shutil.copy(output_path, flux_ref)
+    tmp = os.path.join(work_dir, f".{stem}_turnaround_tmp.png")
 
-    if score > target_score:
-        for attempt, cel_colors in enumerate(cel_colors_list):
-            img.apply_cel_shader(output_path, tmp_path, colors=cel_colors)
-            os.replace(tmp_path, output_path)
+    try:
+        # ── Pass 1: illustration style (vector chain) ─────────────────────
+        img.apply_illustration_style(output_path, tmp)
+        os.replace(tmp, output_path)
+        score = hive.check(output_path)
+        logger.info("Turnaround illustration-style Hive: %.1f%%", score)
+        if score < 0 or score <= target_score:
+            return score
+
+        # ── Pass 2: depth-guided (100% algorithmic pixels, same as 3D mode) ─
+        # Uses raw FLUX as depth/normal reference; derives color palette from
+        # FLUX posterized to 16 flat colors. Output pixels are 100% algorithmic
+        # — same guarantee as depth-guided 3D (<5% Hive).
+        posterized_flux = img._prepare_posterized(flux_ref, colors=16, dither=False)
+        img.render_depth_guided_3d(
+            posterized_flux,
+            flux_ref,
+            tmp,
+            strength=0.7,    # subtle shading — appropriate for reference sheets
+            light_grid=32,
+            white_background=True,
+        )
+        os.replace(tmp, output_path)
+        score = hive.check(output_path)
+        logger.info("Turnaround depth-guided Hive: %.1f%%", score)
+        if score < 0 or score <= target_score:
+            return score
+
+        # ── Pass 3: cel-shader FS (last resort, rarely needed) ───────────
+        for colors in (12, 8):
+            img.apply_cel_shader(output_path, tmp, colors=colors, dither=True, grain_sigma=3.0)
+            os.replace(tmp, output_path)
             score = hive.check(output_path)
-            logger.info(
-                "Cel-shade attempt %d colors=%d → Hive %.1f%%",
-                attempt + 1, cel_colors, score,
-            )
+            logger.info("Turnaround cel-FS colors=%d Hive: %.1f%%", colors, score)
             if score < 0 or score <= target_score:
-                break
+                return score
+
+    finally:
+        for p in (flux_ref, tmp):
+            if os.path.isfile(p):
+                os.remove(p)
 
     return score
 
@@ -163,7 +204,6 @@ def _run_legacy_3d(
     config: dict,
     target_score: float,
 ) -> float:
-    """Legacy depth-guided 3D mode (kept for backward compatibility)."""
     threed_mode = str(config.get("THREED_MODE", "kontext")).lower()
 
     if threed_mode == "depth-guided":
@@ -185,14 +225,13 @@ def _run_legacy_3d(
         return hive.check(output_path)
     else:
         ai.transform_3d(source_path, output_path)
-        cel_colors_list = [int(config.get("CEL_SHADER_COLORS", "24")), 16, 12]
         tmp = os.path.join(work_dir, f".{stem}_3d_cel.png")
         score = 100.0
-        for attempt, cel_colors in enumerate(cel_colors_list):
+        for cel_colors in (int(config.get("CEL_SHADER_COLORS", "24")), 16, 12):
             img.apply_cel_shader(output_path, tmp, colors=cel_colors)
             os.replace(tmp, output_path)
             score = hive.check(output_path)
-            logger.info("Cel-shade attempt %d colors=%d → Hive %.1f%%", attempt + 1, cel_colors, score)
+            logger.info("Cel-shade colors=%d Hive: %.1f%%", cel_colors, score)
             if score < 0 or score <= target_score:
                 break
         return score

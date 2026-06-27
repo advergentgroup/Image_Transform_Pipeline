@@ -317,10 +317,28 @@ vtracer.convert_image_to_svg_py(
         lum = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
         return np.clip(1.0 - np.abs(lum - 128.0) / 128.0, 0.0, 1.0)
 
-    def apply_cel_shader(self, input_path: str, output_path: str, colors: int = 24) -> None:
-        """Quantize FLUX 3D output to a limited palette with dithering.
-        Preserves FLUX 3D shapes/lighting, destroys AI frequency fingerprint.
-        Result looks like cel-shaded / cartoon 3D render."""
+    def apply_illustration_style(self, input_path: str, output_path: str, colors: int = 16) -> None:
+        """Posterize to flat palette + grain σ=1.0 + JPEG quality=93.
+        Identical chain to the vector pipeline — reliably low Hive on illustration images."""
+        with open(input_path, "rb") as f:
+            seed = int(hashlib.md5(f.read()).hexdigest()[:8], 16)
+
+        posterized = self._prepare_posterized(input_path, colors=colors, dither=False)
+        humanized = self._humanize_illustration(posterized, seed)
+        humanized = humanized.filter(ImageFilter.UnsharpMask(radius=0.6, percent=60, threshold=2))
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        humanized.save(output_path, "PNG")
+
+    def apply_cel_shader(
+        self,
+        input_path: str,
+        output_path: str,
+        colors: int = 24,
+        dither: bool = True,
+        grain_sigma: float = 3.0,
+    ) -> None:
+        """Quantize FLUX output to a limited palette to disrupt AI frequency fingerprint.
+        dither=True (FS) is more effective for Hive; dither=False avoids dot artifacts."""
         with open(input_path, "rb") as f:
             raw = f.read()
         seed = int(hashlib.md5(raw).hexdigest()[:8], 16)
@@ -329,10 +347,11 @@ vtracer.convert_image_to_svg_py(
         img = Image.open(io.BytesIO(raw)).convert("RGB")
         img = img.filter(ImageFilter.GaussianBlur(radius=0.4))
 
+        dither_mode = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
         quantized = img.quantize(
             colors=max(8, min(colors, 48)),
             method=Image.Quantize.MEDIANCUT,
-            dither=Image.Dither.FLOYDSTEINBERG,
+            dither=dither_mode,
         ).convert("RGB")
 
         quantized = ImageEnhance.Sharpness(quantized).enhance(1.4)
@@ -340,7 +359,7 @@ vtracer.convert_image_to_svg_py(
 
         arr = np.array(quantized, dtype=np.float32)
         midtone = self._midtone_weight(arr)
-        arr += rng.normal(0, 3.0, arr.shape) * midtone[..., None]
+        arr += rng.normal(0, grain_sigma, arr.shape) * midtone[..., None]
         arr = np.clip(arr, 0, 255).astype(np.uint8)
 
         buf = io.BytesIO()
