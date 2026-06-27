@@ -26,6 +26,24 @@ class AIService:
         "original background preserved."
     )
 
+    TURNAROUND_PROMPT = (
+        "Character design turnaround reference sheet. Using the provided character as reference, "
+        "create a professional turnaround with exactly 5 views arranged in a single horizontal row "
+        "on a plain white background. Left to right order: "
+        "(1) three-quarter left view — front-left diagonal angle, "
+        "(2) left side profile — 90 degrees left, fully sideways, "
+        "(3) back view — character facing directly away, full rear view, "
+        "(4) right side profile — 90 degrees right, fully sideways, "
+        "(5) three-quarter right view — front-right diagonal angle. "
+        "All 5 views show the complete character from head to toe in a neutral A-pose with arms "
+        "slightly apart at sides. Maintain identical proportions, exact same character design, "
+        "colors, hair, clothing, and all details across all 5 views. "
+        "Each view is independently drawn — absolutely no left-right mirroring. "
+        "Clean flat illustrator style with clear outlines, even lighting, white background, "
+        "all 5 views equally sized and evenly spaced. Wide panoramic 16:9 format. "
+        "No text, no labels, no annotations, no drop shadows on background."
+    )
+
     LEGACY_UNIQUE_PROMPT = (
         "same character, same pose, same colors, cartoon illustration, "
         "high quality, clean lines, detailed"
@@ -77,6 +95,7 @@ class AIService:
         self.flux_kontext_steps = int(config.get("FLUX_KONTEXT_STEPS", 28))
 
         self.kontext_3d_prompt = config.get("KONTEXT_3D_PROMPT", self.KONTEXT_3D_PROMPT)
+        self.turnaround_prompt = config.get("TURNAROUND_PROMPT", self.TURNAROUND_PROMPT)
         self.legacy_unique_prompt = config.get("LEGACY_UNIQUE_PROMPT", self.LEGACY_UNIQUE_PROMPT)
         self.legacy_pixar_prompt = config.get("LEGACY_PIXAR_PROMPT", self.LEGACY_PIXAR_PROMPT)
         self.negative_prompt = config.get("NEGATIVE_PROMPT", self.NEGATIVE_PROMPT)
@@ -144,50 +163,83 @@ class AIService:
 
         return output_path
 
-    def _run_flux_redux(self, input_path: str, output_path: str):
-        with open(input_path, "rb") as image_file:
-            output = replicate.run(
-                self.flux_redux_model,
-                input={
-                    "redux_image": image_file,
-                    "aspect_ratio": self._closest_aspect_ratio(input_path),
-                    "guidance": self.flux_redux_guidance,
-                    "num_inference_steps": 28,
-                    "output_format": "png",
-                },
+    def generate_turnaround(self, input_path: str, output_path: str) -> str:
+        """Generate 5-view character turnaround reference sheet (16:9 wide image)."""
+        self._run_flux_kontext(
+            input_path, self.turnaround_prompt, output_path, aspect_ratio="16:9"
+        )
+        return output_path
+
+    def repaint_to_break_fingerprint(self, input_path: str, output_path: str, strength: float | None = None) -> str:
+        """Pass FLUX output through SD 1.5 img2img.
+        Keeps 3D structure from FLUX, replaces diffusion fingerprint with SD 1.5."""
+        s = strength if strength is not None else float(self.config.get("REPAINT_STRENGTH", "0.35"))
+        try:
+            self._run_legacy_img2img(
+                input_path,
+                self.legacy_pixar_prompt,
+                s,
+                output_path,
             )
+        except OSError as exc:
+            raise RuntimeError(f"Cannot reach Replicate API: {exc}") from exc
+        return output_path
+
+    def _run_flux_redux(self, input_path: str, output_path: str):
+        try:
+            with open(input_path, "rb") as image_file:
+                output = replicate.run(
+                    self.flux_redux_model,
+                    input={
+                        "redux_image": image_file,
+                        "aspect_ratio": self._closest_aspect_ratio(input_path),
+                        "guidance": self.flux_redux_guidance,
+                        "num_inference_steps": 28,
+                        "output_format": "png",
+                    },
+                )
+        except OSError as exc:
+            raise RuntimeError(f"Cannot reach Replicate API: {exc}") from exc
         self._save_output(output, output_path)
 
-    def _run_flux_kontext(self, input_path: str, prompt: str, output_path: str):
-        with open(input_path, "rb") as image_file:
-            output = replicate.run(
-                self.flux_kontext_model,
-                input={
-                    "prompt": prompt,
-                    "input_image": image_file,
-                    "aspect_ratio": "match_input_image",
-                    "guidance": self.flux_kontext_guidance,
-                    "num_inference_steps": self.flux_kontext_steps,
-                    "output_format": "png",
-                },
-            )
+    def _run_flux_kontext(
+        self, input_path: str, prompt: str, output_path: str, aspect_ratio: str = "match_input_image"
+    ):
+        try:
+            with open(input_path, "rb") as image_file:
+                output = replicate.run(
+                    self.flux_kontext_model,
+                    input={
+                        "prompt": prompt,
+                        "input_image": image_file,
+                        "aspect_ratio": aspect_ratio,
+                        "guidance": self.flux_kontext_guidance,
+                        "num_inference_steps": self.flux_kontext_steps,
+                        "output_format": "png",
+                    },
+                )
+        except OSError as exc:
+            raise RuntimeError(f"Cannot reach Replicate API: {exc}") from exc
         self._save_output(output, output_path)
 
     def _run_legacy_img2img(
         self, input_path: str, prompt: str, prompt_strength: float, output_path: str
     ):
-        with open(input_path, "rb") as image_file:
-            output = replicate.run(
-                self.legacy_model,
-                input={
-                    "image": image_file,
-                    "prompt": prompt,
-                    "negative_prompt": self.negative_prompt,
-                    "prompt_strength": prompt_strength,
-                    "num_inference_steps": 30,
-                    "guidance_scale": 7.5,
-                },
-            )
+        try:
+            with open(input_path, "rb") as image_file:
+                output = replicate.run(
+                    self.legacy_model,
+                    input={
+                        "image": image_file,
+                        "prompt": prompt,
+                        "negative_prompt": self.negative_prompt,
+                        "prompt_strength": prompt_strength,
+                        "num_inference_steps": 30,
+                        "guidance_scale": 7.5,
+                    },
+                )
+        except OSError as exc:
+            raise RuntimeError(f"Cannot reach Replicate API: {exc}") from exc
         self._save_output(output, output_path)
 
     def _closest_aspect_ratio(self, image_path: str) -> str:

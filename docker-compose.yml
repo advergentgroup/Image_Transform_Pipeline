@@ -12,6 +12,9 @@ services:
       OUTPUT_FOLDER: tmp/outputs
     volumes:
       - app-data:/app/tmp
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     restart: unless-stopped
 
 volumes:

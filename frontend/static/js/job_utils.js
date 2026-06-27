@@ -37,13 +37,20 @@ window.Jobs = (() => {
     return d.toLocaleDateString(I18n.locale(), { month: "short", day: "numeric" }) + ", " + time;
   }
 
+  function secondHiveKey(result) {
+    if (result.hive_turnaround != null) return "hive_turnaround";
+    if (result.hive_3d != null) return "hive_3d";
+    return null;
+  }
+
   function avgHive(job) {
     if (job.avg_hive != null) return job.avg_hive;
     if (!job.results?.length) return null;
     const scores = [];
     job.results.forEach(r => {
       if (r.hive_vector != null) scores.push(r.hive_vector);
-      if (r.hive_3d != null) scores.push(r.hive_3d);
+      if (r.hive_turnaround != null) scores.push(r.hive_turnaround);
+      else if (r.hive_3d != null) scores.push(r.hive_3d);
       if (r.hive_score != null) scores.push(r.hive_score);
     });
     if (!scores.length) return null;
@@ -60,7 +67,8 @@ window.Jobs = (() => {
   function resultRowAvg(result) {
     const scores = [];
     if (result.hive_vector != null && result.hive_vector >= 0) scores.push(result.hive_vector);
-    if (result.hive_3d != null && result.hive_3d >= 0) scores.push(result.hive_3d);
+    const k2 = secondHiveKey(result);
+    if (k2 && result[k2] >= 0) scores.push(result[k2]);
     if (!scores.length) return null;
     return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
   }
@@ -86,13 +94,17 @@ window.Jobs = (() => {
   function renderQualityReport(results) {
     if (!results?.length) return "";
 
+    const hasTurnaround = results.some(r => r.hive_turnaround != null);
+    const col2Label = hasTurnaround ? I18n.t("hive.colTurnaround") : I18n.t("hive.col3d");
+
     const rows = results.map(r => {
       const avg = resultRowAvg(r);
+      const k2 = secondHiveKey(r);
       const name = r.filename || "—";
       return `<tr>
         <td class="qr-file" title="${name}">${name}</td>
         <td>${renderQualityCell(r.hive_vector)}</td>
-        <td>${renderQualityCell(r.hive_3d)}</td>
+        <td>${renderQualityCell(k2 ? r[k2] : null)}</td>
         <td>${renderQualityCell(avg)}</td>
       </tr>`;
     }).join("");
@@ -105,7 +117,7 @@ window.Jobs = (() => {
             <tr>
               <th>${I18n.t("hive.colFile")}</th>
               <th>${I18n.t("hive.colVector")}</th>
-              <th>${I18n.t("hive.col3d")}</th>
+              <th>${col2Label}</th>
               <th>${I18n.t("hive.colAvg")}</th>
             </tr>
           </thead>
@@ -201,16 +213,18 @@ window.Jobs = (() => {
     });
 
     const vectorLabel = I18n.t("hive.vector");
-    const threedLabel = I18n.t("hive.threed");
+    const hasTurnaround = (results || []).some(r => r.hive_turnaround != null);
+    const secondLabel = hasTurnaround ? I18n.t("hive.turnaround") : I18n.t("hive.threed");
 
     const cards = pool.map(name => {
       const result = resultByFile[name];
       const done = !!result;
       const cardCls = done ? "result-card result-card-done" : "result-card result-card-pending";
+      const k2 = done ? secondHiveKey(result) : null;
       const scoresHtml = done
         ? `<div class="result-card-scores">
             ${formatHiveScoreLine(result.hive_vector, vectorLabel)}
-            ${formatHiveScoreLine(result.hive_3d, threedLabel)}
+            ${formatHiveScoreLine(k2 ? result[k2] : null, secondLabel)}
           </div>`
         : `<div class="result-card-scores result-card-scores-pending">${I18n.t("hive.pending")}</div>`;
 

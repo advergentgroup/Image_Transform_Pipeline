@@ -112,8 +112,8 @@ vtracer.convert_image_to_svg_py(
         )
         return np.array(small.resize((w, h), Image.Resampling.BILINEAR), dtype=np.float32)
 
-    def _prepare_posterized(self, input_path: str) -> Image.Image:
-        """16-color flat art on white — Hive-safe base for vector and depth-guided 3D."""
+    def _prepare_posterized(self, input_path: str, colors: int | None = None, dither: bool = False) -> Image.Image:
+        """Quantize image to a limited palette — Hive-safe base for vector and depth-guided 3D."""
         img = Image.open(input_path).convert("RGB")
         max_side = 2048
         if max(img.width, img.height) > max_side:
@@ -125,11 +125,12 @@ vtracer.convert_image_to_svg_py(
 
         img = ImageOps.autocontrast(img, cutoff=1)
         img = img.filter(ImageFilter.GaussianBlur(radius=0.6))
-        colors = max(4, min(self.vector_colors, 32))
+        n_colors = max(4, min(colors or self.vector_colors, 64))
+        dither_mode = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
         return img.quantize(
-            colors=colors,
+            colors=n_colors,
             method=Image.Quantize.MEDIANCUT,
-            dither=Image.Dither.NONE,
+            dither=dither_mode,
         ).convert("RGB")
 
     def _humanize_illustration(self, rgb: Image.Image, seed: int) -> Image.Image:
@@ -166,16 +167,6 @@ vtracer.convert_image_to_svg_py(
         """
         High-quality 3D look from flat colors + FLUX depth reference.
         Output pixels are 100% algorithmic — guaranteed Hive < 5%.
-
-        Improvements:
-        - Stronger normal map (more visible volume)
-        - 4 light sources (key + fill + back + ambient)
-        - Specular highlights with Phong model
-        - Subsurface scattering approximation on skin tones
-        - Smoother AO with better shadow falloff
-        - Soft shadow cast under character
-        - Color temperature shift (warm key / cool fill)
-        - Organic mid-tone grain + JPEG finish (anti-detector)
         """
         vec = np.array(posterized.convert("RGB"), dtype=np.float32)
         height, width = vec.shape[:2]
@@ -224,20 +215,20 @@ vtracer.convert_image_to_svg_py(
             diffuse_g += weight * d * cg
             diffuse_b += weight * d * cb
 
-        base_ambient = 0.30
-        diffuse_r = np.clip(base_ambient + diffuse_r * strength, 0.15, 1.25)
-        diffuse_g = np.clip(base_ambient + diffuse_g * strength, 0.15, 1.25)
-        diffuse_b = np.clip(base_ambient + diffuse_b * strength, 0.15, 1.25)
+        base_ambient = 0.18
+        diffuse_r = np.clip(base_ambient + diffuse_r * strength, 0.10, 1.30)
+        diffuse_g = np.clip(base_ambient + diffuse_g * strength, 0.10, 1.30)
+        diffuse_b = np.clip(base_ambient + diffuse_b * strength, 0.10, 1.30)
 
         # ── Phong specular (key light only) ───────────────────────────
         key_lx, key_ly, key_lz = 0.45, -0.55, 0.70
         key_ln = (key_lx**2 + key_ly**2 + key_lz**2) ** 0.5
         dot_kn = np.clip(nx * key_lx / key_ln + ny * key_ly / key_ln + nz * key_lz / key_ln, 0, 1)
-        spec_map = np.power(dot_kn, 28.0) * 0.55  # shininess 28 = semi-glossy
+        spec_map = np.power(dot_kn, 22.0) * 0.80  # stronger specular
 
         # ── Ambient occlusion ──────────────────────────────────────────
-        ao_wide = 1.0 - self._blur_array(alpha, 18.0) * 0.35
-        ao_tight = 1.0 - self._blur_array(alpha, 6.0) * 0.15
+        ao_wide = 1.0 - self._blur_array(alpha, 18.0) * 0.50
+        ao_tight = 1.0 - self._blur_array(alpha, 6.0) * 0.25
         ao = ao_wide * ao_tight
 
         # ── Rim light (edge glow) ──────────────────────────────────────
@@ -326,17 +317,52 @@ vtracer.convert_image_to_svg_py(
         lum = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
         return np.clip(1.0 - np.abs(lum - 128.0) / 128.0, 0.0, 1.0)
 
+    def apply_cel_shader(self, input_path: str, output_path: str, colors: int = 24) -> None:
+        """Quantize FLUX 3D output to a limited palette with dithering.
+        Preserves FLUX 3D shapes/lighting, destroys AI frequency fingerprint.
+        Result looks like cel-shaded / cartoon 3D render."""
+        with open(input_path, "rb") as f:
+            raw = f.read()
+        seed = int(hashlib.md5(raw).hexdigest()[:8], 16)
+        rng = np.random.default_rng(seed)
+
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        img = img.filter(ImageFilter.GaussianBlur(radius=0.4))
+
+        quantized = img.quantize(
+            colors=max(8, min(colors, 48)),
+            method=Image.Quantize.MEDIANCUT,
+            dither=Image.Dither.FLOYDSTEINBERG,
+        ).convert("RGB")
+
+        quantized = ImageEnhance.Sharpness(quantized).enhance(1.4)
+        quantized = quantized.filter(ImageFilter.UnsharpMask(radius=0.8, percent=70, threshold=2))
+
+        arr = np.array(quantized, dtype=np.float32)
+        midtone = self._midtone_weight(arr)
+        arr += rng.normal(0, 3.0, arr.shape) * midtone[..., None]
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+        buf = io.BytesIO()
+        Image.fromarray(arr, "RGB").save(buf, format="JPEG", quality=82, optimize=True)
+        buf.seek(0)
+        result = Image.open(buf).convert("RGB")
+        result = ImageEnhance.Sharpness(result).enhance(1.2)
+
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        result.save(output_path, "PNG")
+
     def apply_threed_postprocess(
         self,
         input_path: str,
         output_path: str,
-        intensity: int = 5,
+        intensity: int = 6,
         blend_source: str | None = None,
     ):
         """
-        Hive humanization — 6 layers targeting diffusion frequency artifacts,
-        uniform noise, perfect edges, and missing chromatic aberration.
-        Default intensity=5 activates all layers at balanced strength.
+        Hive humanization — no initial blur (that caused visible softness),
+        heavy grain + aggressive JPEG + strong resharpen + color perturbation.
+        intensity 6/8/10 = three retry steps used by the pipeline.
         """
         level = max(1, min(intensity, 10))
         with open(input_path, "rb") as f:
@@ -346,28 +372,40 @@ vtracer.convert_image_to_svg_py(
 
         img = Image.open(io.BytesIO(raw)).convert("RGB")
 
-        # Layer 1 — blur + resharpen (breaks diffusion FFT grid)
-        blur_radius = 0.3 + level * 0.08
-        img = img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-        img = ImageEnhance.Sharpness(img).enhance(1.0 + level * 0.04)
+        # Layer 1 — gentle pre-sharpen only (no blur — blur degrades quality
+        # without effectively breaking diffusion frequency patterns)
+        img = ImageEnhance.Sharpness(img).enhance(1.0 + level * 0.05)
 
-        # Layer 2 — organic mid-tone grain
+        # Layer 2 — heavy organic grain in mid-tones and shadows
         arr = np.array(img, dtype=np.float32)
         midtone = self._midtone_weight(arr)
-        noise_sigma = 1.2 + level * 0.5
-        arr += rng.normal(0, noise_sigma, arr.shape) * midtone[..., None]
+        lum = 0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]
+        shadow = np.clip(1.0 - lum / 160.0, 0.0, 1.0)
+        noise_sigma = 2.0 + level * 0.9   # level 6 → σ≈7.4, level 10 → σ≈11
+        grain = rng.normal(0, noise_sigma, arr.shape)
+        arr += grain * (midtone[..., None] + shadow[..., None] * 0.35)
         arr = np.clip(arr, 0, 255)
         img = Image.fromarray(arr.astype(np.uint8), "RGB")
 
-        # Layer 3 — JPEG round-trip (DCT fingerprint disruption)
+        # Layer 3 — aggressive JPEG + strong resharpen (main DCT disruption)
+        jpeg_q = max(72, 90 - level * 2)   # level 6 → 78, level 10 → 72
         jpeg_buf = io.BytesIO()
-        jpeg_q = max(82, 96 - level * 2)
         img.save(jpeg_buf, format="JPEG", quality=jpeg_q, optimize=True)
         jpeg_buf.seek(0)
         img = Image.open(jpeg_buf).convert("RGB")
+        img = ImageEnhance.Sharpness(img).enhance(1.0 + level * 0.10)
+        img = img.filter(ImageFilter.UnsharpMask(radius=0.8, percent=60 + level * 8, threshold=2))
         arr = np.array(img, dtype=np.float32)
 
-        # Layer 4 — chromatic micro-aberration (level >= 3)
+        # Layer 4 — color temperature perturbation (breaks AI color coherence)
+        r_nudge = ((seed % 11) - 5) * level * 0.35
+        g_nudge = ((seed % 7) - 3) * level * 0.18
+        b_nudge = -r_nudge * 0.55 + ((seed % 5) - 2) * level * 0.25
+        arr[:, :, 0] = np.clip(arr[:, :, 0] + r_nudge, 0, 255)
+        arr[:, :, 1] = np.clip(arr[:, :, 1] + g_nudge, 0, 255)
+        arr[:, :, 2] = np.clip(arr[:, :, 2] + b_nudge, 0, 255)
+
+        # Layer 5 — chromatic micro-aberration (level >= 3)
         if level >= 3:
             r_shift = 0.4 + (seed % 100) / 100.0 * 0.45
             b_shift = -(0.3 + (seed % 80) / 100.0 * 0.4)
@@ -375,7 +413,7 @@ vtracer.convert_image_to_svg_py(
             arr[:, :, 2] = ndimage.shift(arr[:, :, 2], (0, b_shift), order=1, mode="nearest")
             arr = np.clip(arr, 0, 255)
 
-        # Layer 5 — block-boundary micro-warp (level >= 4)
+        # Layer 6 — block-boundary micro-warp (level >= 4)
         if level >= 4:
             block = 16
             h, w = arr.shape[:2]
@@ -390,13 +428,31 @@ vtracer.convert_image_to_svg_py(
 
         img = Image.fromarray(arr.astype(np.uint8), "RGB")
 
-        # Layer 6 — blend original source statistics (level >= 2)
+        # Layer 7 — blend original source (level >= 2)
         if blend_source and os.path.isfile(blend_source) and level >= 2:
             source = Image.open(blend_source).convert("RGB")
             if source.size != img.size:
                 source = source.resize(img.size, Image.Resampling.LANCZOS)
-            alpha = min(0.05 + (level - 2) * 0.01, 0.15)
-            img = Image.blend(img, source, alpha)
+            blend_alpha = min(0.05 + (level - 2) * 0.01, 0.15)
+            img = Image.blend(img, source, blend_alpha)
+
+        # Layer 8 — resize cycle (disrupts AI spatial grid, level >= 5)
+        if level >= 5:
+            w_sz, h_sz = img.size
+            img = img.resize(
+                (max(1, int(w_sz * 0.97)), max(1, int(h_sz * 0.97))),
+                Image.Resampling.LANCZOS,
+            )
+            img = img.resize((w_sz, h_sz), Image.Resampling.LANCZOS)
+
+        # Layer 9 — second JPEG pass + resharpen (level >= 7)
+        if level >= 7:
+            j2_q = max(70, 84 - (level - 7) * 5)   # level 7 → 84, level 10 → 69→70
+            j2_buf = io.BytesIO()
+            img.save(j2_buf, format="JPEG", quality=j2_q, optimize=True)
+            j2_buf.seek(0)
+            img = Image.open(j2_buf).convert("RGB")
+            img = ImageEnhance.Sharpness(img).enhance(1.0 + (level - 6) * 0.07)
 
         clean = Image.fromarray(np.array(img, dtype=np.uint8), "RGB")
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -421,6 +477,7 @@ vtracer.convert_image_to_svg_py(
         posterized = self._prepare_posterized(input_path)
         humanized = self._humanize_illustration(posterized, seed)
         result = self._composite_on_gradient(humanized)
+        result = result.filter(ImageFilter.UnsharpMask(radius=0.6, percent=60, threshold=2))
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         result.save(output_path, "PNG")
 

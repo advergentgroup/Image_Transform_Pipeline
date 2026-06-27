@@ -1,4 +1,5 @@
 const PROMPT_FIELDS = [
+  "TURNAROUND_PROMPT",
   "KONTEXT_3D_PROMPT",
   "LEGACY_UNIQUE_PROMPT",
   "LEGACY_PIXAR_PROMPT",
@@ -6,6 +7,7 @@ const PROMPT_FIELDS = [
 ];
 
 const fieldMap = {
+  TURNAROUND_PROMPT: "promptTurnaround",
   KONTEXT_3D_PROMPT: "promptKontext3d",
   LEGACY_UNIQUE_PROMPT: "promptLegacyUnique",
   LEGACY_PIXAR_PROMPT: "promptLegacyPixar",
