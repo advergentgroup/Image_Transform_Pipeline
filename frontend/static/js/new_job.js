@@ -1,65 +1,176 @@
-const dropzone       = document.getElementById("dropzone");
-const fileInput      = document.getElementById("fileInput");
-const fileList       = document.getElementById("fileList");
-const previewGrid    = document.getElementById("previewGrid");
-const processBtn     = document.getElementById("processBtn");
-const browseBtn      = document.getElementById("browseBtn");
-const clearBtn       = document.getElementById("clearBtn");
-const fileCounter    = document.getElementById("fileCounter");
-const errorMsg       = document.getElementById("errorMsg");
+const generateBtn     = document.getElementById("generateBtn");
+const generateCount   = document.getElementById("generateCount");
+const generateCountRange = document.getElementById("generateCountRange");
+const generateCounter = document.getElementById("generateCounter");
+const errorMsg        = document.getElementById("errorMsg");
 
-const progressCard   = document.getElementById("progressCard");
-const progressBar    = document.getElementById("progressBar");
-const progressLabel  = document.getElementById("progressLabel");
+const styleDropzone   = document.getElementById("styleDropzone");
+const styleFileInput  = document.getElementById("styleFileInput");
+const stylePreviewGrid = document.getElementById("stylePreviewGrid");
+const styleRefCounter = document.getElementById("styleRefCounter");
+const styleClearBtn   = document.getElementById("styleClearBtn");
+
+const progressCard    = document.getElementById("progressCard");
+const progressBar     = document.getElementById("progressBar");
+const progressLabel   = document.getElementById("progressLabel");
 const activeProgressPct = document.getElementById("activeProgressPct");
-const activeEta      = document.getElementById("activeEta");
-const activeJobId    = document.getElementById("activeJobId");
+const activeEta       = document.getElementById("activeEta");
+const activeJobId     = document.getElementById("activeJobId");
 const activeJobStatus = document.getElementById("activeJobStatus");
-const resultsGrid    = document.getElementById("resultsGrid");
-const stepCurrent    = document.getElementById("stepCurrent");
+const resultsGrid     = document.getElementById("resultsGrid");
+const stepCurrent     = document.getElementById("stepCurrent");
 const stepCurrentLabel = document.getElementById("stepCurrentLabel");
-const stepper        = document.getElementById("stepper");
+const stepper         = document.getElementById("stepper");
+const jobWarning      = document.getElementById("jobWarning");
 
-const doneSection    = document.getElementById("doneSection");
-const qualityReport  = document.getElementById("qualityReport");
-const dlArchive      = document.getElementById("dlArchive");
-const retryJobBtn    = document.getElementById("retryJobBtn");
+const doneSection     = document.getElementById("doneSection");
+const qualityReport   = document.getElementById("qualityReport");
+const dlArchive       = document.getElementById("dlArchive");
+const continueBtn     = document.getElementById("continueBtn");
+const retryJobBtn     = document.getElementById("retryJobBtn");
 
-let selectedFiles = [];
 let pollingTimer  = null;
 let jobStartTime  = null;
-let previewUrls   = [];
 let currentJobId  = null;
 let currentJobTotal = 0;
 let currentJobFiles = [];
+let styleRefFiles   = [];
+let stylePreviewUrls = [];
 
-browseBtn.addEventListener("click", e => {
+const MAX_STYLE_REFS = 10;
+
+function syncCountInputs(from) {
+  const value = Math.max(1, Math.min(50, Number(from.value || 1)));
+  if (generateCount) generateCount.value = value;
+  if (generateCountRange) generateCountRange.value = value;
+  if (generateCounter) generateCounter.textContent = I18n.generateCounter(value);
+}
+
+generateCount?.addEventListener("input", () => syncCountInputs(generateCount));
+generateCountRange?.addEventListener("input", () => syncCountInputs(generateCountRange));
+syncCountInputs(generateCount || { value: 1 });
+
+function updateStyleRefCounter() {
+  if (styleRefCounter) {
+    styleRefCounter.textContent = I18n.styleRefCounter(styleRefFiles.length, MAX_STYLE_REFS);
+  }
+}
+
+function clearStyleRefs() {
+  stylePreviewUrls.forEach(url => URL.revokeObjectURL(url));
+  stylePreviewUrls = [];
+  styleRefFiles = [];
+  if (styleFileInput) styleFileInput.value = "";
+  if (stylePreviewGrid) {
+    stylePreviewGrid.innerHTML = "";
+    stylePreviewGrid.classList.add("hidden");
+  }
+  if (styleClearBtn) styleClearBtn.classList.add("hidden");
+  updateStyleRefCounter();
+}
+
+function handleStyleFiles(files) {
+  errorMsg.textContent = "";
+  const valid = files.filter(f => /\.(jpe?g|png)$/i.test(f.name));
+  if (!valid.length) {
+    errorMsg.textContent = I18n.t("error.invalidFormat");
+    return;
+  }
+  if (valid.length > MAX_STYLE_REFS) {
+    errorMsg.textContent = I18n.t("error.maxStyleRefs");
+    return;
+  }
+  clearStyleRefs();
+  styleRefFiles = valid;
+  stylePreviewGrid.classList.remove("hidden");
+  stylePreviewGrid.innerHTML = valid.map(f => {
+    const url = URL.createObjectURL(f);
+    stylePreviewUrls.push(url);
+    return `<div class="preview-item"><img src="${url}" alt="" /><span class="preview-item-name">${f.name}</span></div>`;
+  }).join("");
+  styleClearBtn?.classList.remove("hidden");
+  updateStyleRefCounter();
+}
+
+styleDropzone?.addEventListener("click", e => {
+  if (e.target.closest("#styleClearBtn")) return;
+  styleFileInput?.click();
+});
+styleDropzone?.addEventListener("dragover", e => {
+  e.preventDefault();
+  styleDropzone.classList.add("drag-over");
+});
+styleDropzone?.addEventListener("dragleave", () => styleDropzone.classList.remove("drag-over"));
+styleDropzone?.addEventListener("drop", e => {
+  e.preventDefault();
+  styleDropzone.classList.remove("drag-over");
+  handleStyleFiles([...e.dataTransfer.files]);
+});
+styleFileInput?.addEventListener("change", () => handleStyleFiles([...styleFileInput.files]));
+styleClearBtn?.addEventListener("click", e => {
   e.stopPropagation();
-  fileInput.click();
+  clearStyleRefs();
+});
+updateStyleRefCounter();
+
+generateBtn?.addEventListener("click", async () => {
+  if (generateBtn.disabled) return;
+
+  errorMsg.textContent = "";
+  generateBtn.disabled = true;
+
+  const count = Number(generateCount?.value || 1);
+  const formData = new FormData();
+  formData.append("count", String(count));
+  styleRefFiles.forEach(f => formData.append("style_refs", f));
+
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      showError(data.error || I18n.t("error.generateFailed"));
+      generateBtn.disabled = false;
+      return;
+    }
+
+    showProgress(data.job_id, data.file_count);
+  } catch {
+    showError(I18n.t("error.network"));
+    generateBtn.disabled = false;
+  }
 });
 
-dropzone.addEventListener("click", e => {
-  if (e.target.closest(".btn") || e.target.closest(".file-list") || e.target.closest(".preview-grid")) return;
-  fileInput.click();
-});
+continueBtn?.addEventListener("click", async () => {
+  if (!currentJobId || continueBtn.disabled) return;
 
-dropzone.addEventListener("dragover", e => {
-  e.preventDefault();
-  dropzone.classList.add("drag-over");
-});
+  continueBtn.disabled = true;
+  activeJobStatus.textContent = I18n.statusLabel("processing");
+  activeJobStatus.className = "status-badge status-processing";
+  doneSection.classList.add("hidden");
+  stepCurrent.classList.remove("hidden");
+  jobStartTime = Date.now();
+  Jobs.saveActiveJob(currentJobId, currentJobTotal);
 
-dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag-over"));
-
-dropzone.addEventListener("drop", e => {
-  e.preventDefault();
-  dropzone.classList.remove("drag-over");
-  handleFiles([...e.dataTransfer.files]);
-});
-
-fileInput.addEventListener("change", () => handleFiles([...fileInput.files]));
-
-clearBtn.addEventListener("click", () => {
-  clearFiles();
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}/continue`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      showError(data.error || I18n.t("error.continueFailed"));
+      continueBtn.disabled = false;
+      showAwaitingContinue(currentJobId, currentJobTotal, await Jobs.fetchStatus(currentJobId));
+      return;
+    }
+    stopPolling();
+    pollingTimer = setInterval(() => pollStatus(currentJobId), 2000);
+    pollStatus(currentJobId);
+  } catch {
+    showError(I18n.t("error.network"));
+    continueBtn.disabled = false;
+  }
 });
 
 if (retryJobBtn) {
@@ -68,9 +179,7 @@ if (retryJobBtn) {
     Jobs.clearActiveJob();
     Jobs.resetProgressUI(progressCard);
     progressCard.classList.add("hidden");
-    processBtn.disabled = false;
-    browseBtn.disabled = false;
-    clearBtn.disabled = false;
+    generateBtn.disabled = false;
     errorMsg.textContent = "";
   });
 }
@@ -82,113 +191,14 @@ function stopPolling() {
   }
 }
 
-function clearFiles() {
-  previewUrls.forEach(url => URL.revokeObjectURL(url));
-  previewUrls = [];
-  selectedFiles = [];
-  fileInput.value = "";
-  fileList.innerHTML = "";
-  previewGrid.innerHTML = "";
-  fileList.classList.add("hidden");
-  previewGrid.classList.add("hidden");
-  clearBtn.classList.add("hidden");
-  processBtn.disabled = true;
-  fileCounter.textContent = I18n.fileCounter(0);
-  errorMsg.textContent = "";
+function jobProgressMetrics(data) {
+  return Jobs.jobProgressMetrics(data);
 }
-
-function handleFiles(files) {
-  errorMsg.textContent = "";
-
-  const valid = files.filter(f => /\.(jpe?g|png)$/i.test(f.name));
-
-  if (valid.length === 0) {
-    errorMsg.textContent = I18n.t("error.invalidFormat");
-    return;
-  }
-  if (valid.length > 10) {
-    errorMsg.textContent = I18n.t("error.maxFiles");
-    return;
-  }
-
-  previewUrls.forEach(url => URL.revokeObjectURL(url));
-  previewUrls = [];
-  selectedFiles = valid;
-  renderFiles();
-  processBtn.disabled = false;
-  clearBtn.classList.remove("hidden");
-}
-
-function renderFiles() {
-  fileCounter.textContent = I18n.fileCounter(selectedFiles.length);
-
-  previewGrid.classList.remove("hidden");
-  previewGrid.innerHTML = selectedFiles.map((f, i) => {
-    const url = URL.createObjectURL(f);
-    previewUrls.push(url);
-    return `
-      <div class="preview-item">
-        <img src="${url}" alt="${f.name}" />
-        <span class="preview-item-name">${f.name}</span>
-      </div>
-    `;
-  }).join("");
-
-  fileList.classList.remove("hidden");
-  fileList.innerHTML = selectedFiles.map(f => `
-    <li class="file-item">
-      <span class="file-item-name">${f.name}</span>
-      <span class="file-item-size">${formatSize(f.size)}</span>
-    </li>
-  `).join("");
-}
-
-function formatSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  return (bytes / 1024 / 1024).toFixed(1) + " MB";
-}
-
-processBtn.addEventListener("click", async e => {
-  e.stopPropagation();
-  if (processBtn.disabled) return;
-
-  errorMsg.textContent = "";
-  processBtn.disabled = true;
-  browseBtn.disabled = true;
-  clearBtn.disabled = true;
-
-  const formData = new FormData();
-  selectedFiles.forEach(f => formData.append("images", f));
-
-  try {
-    const res = await fetch("/api/upload", { method: "POST", body: formData });
-    const data = await res.json();
-
-    if (!res.ok) {
-      showError(data.error || I18n.t("error.uploadFailed"));
-      processBtn.disabled = false;
-      browseBtn.disabled = false;
-      clearBtn.disabled = false;
-      return;
-    }
-
-    showProgress(data.job_id, data.file_count);
-
-  } catch {
-    showError(I18n.t("error.network"));
-    processBtn.disabled = false;
-    browseBtn.disabled = false;
-    clearBtn.disabled = false;
-  }
-});
 
 function showProgress(jobId, total, initial) {
   currentJobId = jobId;
   currentJobTotal = total;
-  currentJobFiles = initial?.files?.length
-    ? initial.files
-    : selectedFiles.map(f => f.name);
+  currentJobFiles = initial?.files || [];
   const saved = Jobs.getActiveJob();
   jobStartTime = saved?.startedAt || Date.now();
   const shortId = "#" + jobId.slice(0, 4).toUpperCase();
@@ -196,6 +206,10 @@ function showProgress(jobId, total, initial) {
   Jobs.saveActiveJob(jobId, total);
   Jobs.resetProgressUI(progressCard);
   progressCard.classList.remove("hidden");
+  if (jobWarning) {
+    jobWarning.textContent = "";
+    jobWarning.classList.add("hidden");
+  }
 
   if (!initial) {
     progressCard.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -205,22 +219,21 @@ function showProgress(jobId, total, initial) {
   activeJobStatus.textContent = I18n.statusLabel("processing");
   activeJobStatus.className = "status-badge status-processing";
   doneSection.classList.add("hidden");
+  if (continueBtn) continueBtn.classList.add("hidden");
   if (qualityReport) {
     qualityReport.innerHTML = "";
     qualityReport.classList.add("hidden");
   }
   stepCurrent.classList.remove("hidden");
 
-  const progress = initial?.progress || 0;
-  const results = initial?.results || [];
-
-  updateProgressUI(progress, total, initial?.step_index ?? 0);
-  renderResults(results, total, currentJobFiles);
-  Jobs.updateStepper(stepper, stepCurrentLabel, progress, total, initial?.step_index ?? 0);
-  Jobs.updateSidebar(jobId, progress, total, true);
+  const metrics = initial ? jobProgressMetrics(initial) : { progress: 0, total, stepIndex: 0 };
+  updateProgressUI(metrics.progress, metrics.total, metrics.stepIndex);
+  renderResults(initial?.results || [], metrics.total, currentJobFiles);
+  Jobs.updateStepper(stepper, stepCurrentLabel, metrics.progress, metrics.total, metrics.stepIndex);
+  Jobs.updateSidebar(jobId, metrics.progress, metrics.total, true, metrics.stepIndex);
 
   stopPolling();
-  pollingTimer = setInterval(() => pollStatus(jobId, total), 2000);
+  pollingTimer = setInterval(() => pollStatus(jobId), 2000);
 }
 
 function updateProgressUI(progress, total, stepIndex = 0, isDone = false) {
@@ -244,10 +257,11 @@ function updateProgressUI(progress, total, stepIndex = 0, isDone = false) {
   }
 }
 
-async function pollStatus(jobId, total) {
+async function pollStatus(jobId) {
   try {
-    const res  = await fetch(`/api/status/${jobId}`);
-    const data = await res.json();
+    const data = await Jobs.fetchStatus(jobId);
+    const metrics = jobProgressMetrics(data);
+    currentJobFiles = data.files || currentJobFiles;
 
     if (data.status === "error") {
       stopPolling();
@@ -256,20 +270,59 @@ async function pollStatus(jobId, total) {
       return;
     }
 
-    if (data.status === "done") {
+    if (data.status === "awaiting_continue") {
       stopPolling();
-      renderResults(data.results, total, data.files);
-      showDone(jobId, total, data.results);
+      showAwaitingContinue(jobId, data.total, data);
       Jobs.notifyChanged();
       return;
     }
 
-    updateProgressUI(data.progress, total, data.step_index ?? 0);
-    renderResults(data.results, total, data.files);
-    Jobs.updateStepper(stepper, stepCurrentLabel, data.progress, total, data.step_index ?? 0);
+    if (data.status === "done") {
+      stopPolling();
+      renderResults(data.results, metrics.total, data.files);
+      showDone(jobId, metrics.total, data);
+      Jobs.notifyChanged();
+      return;
+    }
 
+    updateProgressUI(metrics.progress, metrics.total, metrics.stepIndex);
+    renderResults(data.results, metrics.total, data.files);
+    Jobs.updateStepper(stepper, stepCurrentLabel, metrics.progress, metrics.total, metrics.stepIndex);
   } catch {
   }
+}
+
+function showWarning(message) {
+  if (!jobWarning || !message) return;
+  jobWarning.textContent = message;
+  jobWarning.classList.remove("hidden");
+}
+
+function showAwaitingContinue(jobId, total, data) {
+  const metrics = jobProgressMetrics({ ...data, phase: "reference" });
+  updateProgressUI(metrics.progress, metrics.total, 1, false);
+  renderResults(data.results, metrics.total, data.files);
+  Jobs.updateStepper(stepper, stepCurrentLabel, metrics.progress, metrics.total, 1);
+
+  activeJobStatus.textContent = I18n.statusLabel("awaiting_continue");
+  activeJobStatus.className = "status-badge status-awaiting";
+  activeEta.textContent = I18n.t("progress.reviewReady");
+  stepCurrent.classList.add("hidden");
+
+  if (data.warning) showWarning(data.warning);
+
+  doneSection.classList.remove("hidden");
+  dlArchive.href = `/api/download/${jobId}`;
+  if (continueBtn) {
+    continueBtn.classList.remove("hidden");
+    continueBtn.disabled = false;
+  }
+  if (qualityReport) {
+    qualityReport.innerHTML = Jobs.renderQualityReport(data.results);
+    qualityReport.classList.toggle("hidden", !data.results?.length);
+  }
+
+  Jobs.updateSidebar(null, 0, 0, false);
 }
 
 function showFailed(message) {
@@ -278,9 +331,7 @@ function showFailed(message) {
   activeJobStatus.className = "status-badge status-error";
   Jobs.freezeProgressUI(progressCard, message);
   Jobs.updateSidebar(null, 0, 0, false);
-  processBtn.disabled = false;
-  browseBtn.disabled = false;
-  clearBtn.disabled = false;
+  generateBtn.disabled = false;
 }
 
 function renderResults(results, total, files) {
@@ -293,20 +344,27 @@ function renderResults(results, total, files) {
   );
 }
 
-function showDone(jobId, total, results) {
+function showDone(jobId, total, data) {
   Jobs.clearActiveJob();
+  const metrics = jobProgressMetrics(data);
   activeJobStatus.textContent = I18n.statusLabel("done");
   activeJobStatus.className = "status-badge status-done";
   activeEta.textContent = I18n.t("progress.complete");
-  updateProgressUI(total, total, 4, true);
-  Jobs.updateStepper(stepper, stepCurrentLabel, total, total, 4, true);
+  updateProgressUI(metrics.progress, metrics.total, 3, true);
+  Jobs.updateStepper(stepper, stepCurrentLabel, metrics.progress, metrics.total, 3, true);
   stepCurrent.classList.add("hidden");
+
+  if (data.warning) showWarning(data.warning);
+
   if (qualityReport) {
-    qualityReport.innerHTML = Jobs.renderQualityReport(results);
-    qualityReport.classList.toggle("hidden", !results?.length);
+    qualityReport.innerHTML = Jobs.renderQualityReport(data.results);
+    qualityReport.classList.toggle("hidden", !data.results?.length);
   }
+
   doneSection.classList.remove("hidden");
   dlArchive.href = `/api/download/${jobId}`;
+  if (continueBtn) continueBtn.classList.add("hidden");
+  generateBtn.disabled = false;
   Jobs.updateSidebar(null, 0, 0, false);
 }
 
@@ -331,18 +389,27 @@ async function resumeActiveJob() {
       return;
     }
 
+    if (data.status === "awaiting_continue") {
+      progressCard.classList.remove("hidden");
+      activeJobId.textContent = I18n.jobLabel(Jobs.shortId(saved.jobId));
+      currentJobId = saved.jobId;
+      currentJobTotal = total;
+      showAwaitingContinue(saved.jobId, total, data);
+      return;
+    }
+
     if (data.status === "done") {
       progressCard.classList.remove("hidden");
       activeJobId.textContent = I18n.jobLabel(Jobs.shortId(saved.jobId));
-      updateProgressUI(data.progress, total, 4, true);
+      currentJobId = saved.jobId;
       renderResults(data.results, total, data.files);
-      showDone(saved.jobId, total, data.results);
+      showDone(saved.jobId, total, data);
       return;
     }
 
     if (Jobs.isActive(data.status)) {
       showProgress(saved.jobId, total, data);
-      pollStatus(saved.jobId, total);
+      pollStatus(saved.jobId);
     } else {
       Jobs.clearActiveJob();
     }
@@ -352,15 +419,9 @@ async function resumeActiveJob() {
 }
 
 document.addEventListener("i18n:changed", () => {
-  if (selectedFiles.length) renderFiles();
-  else if (fileCounter) fileCounter.textContent = I18n.fileCounter(0);
+  syncCountInputs(generateCount || { value: 1 });
+  updateStyleRefCounter();
 });
 
 resumeActiveJob();
-
-if (new URLSearchParams(window.location.search).get("pick") === "1") {
-  history.replaceState(null, "", window.location.pathname);
-  requestAnimationFrame(() => fileInput.click());
-}
-
 window.addEventListener("beforeunload", stopPolling);

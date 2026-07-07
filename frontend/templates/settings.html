@@ -8,7 +8,7 @@
 <section class="page-header">
   <div class="page-header-text">
     <h1 class="page-title" data-i18n="page.settings">Settings</h1>
-    <p class="page-sub" data-i18n="settings.sub">Edit AI prompts used before Replicate runs. API keys stay in .env.</p>
+    <p class="page-sub" data-i18n="settings.sub">Edit FLUX prompts for reference and turnaround generation. API keys stay in .env.</p>
   </div>
 </section>
 
@@ -20,35 +20,42 @@
 
     <form id="settingsForm" class="settings-form">
       <label class="settings-field">
-        <span class="settings-label" data-i18n="settings.turnaround">Turnaround (FLUX Kontext)</span>
-        <span class="settings-hint" data-i18n="settings.turnaroundHint">5-view character turnaround sheet — sent to FLUX Kontext.</span>
-        <textarea id="promptTurnaround" name="TURNAROUND_PROMPT" rows="10"></textarea>
+        <span class="settings-label" data-i18n="settings.styleGuided">Style guide prefix (with style refs)</span>
+        <span class="settings-hint" data-i18n="settings.styleGuidedHint">Prepended when you upload style references at job start.</span>
+        <textarea id="promptStyleGuided" name="STYLE_GUIDED_PROMPT" rows="5"></textarea>
       </label>
 
       <label class="settings-field">
-        <span class="settings-label" data-i18n="settings.kontext3d">3D Pixar (FLUX Kontext)</span>
-        <span class="settings-hint" data-i18n="settings.kontext3dHint">Used for legacy-3d mode only.</span>
-        <textarea id="promptKontext3d" name="KONTEXT_3D_PROMPT" rows="8"></textarea>
+        <span class="settings-label" data-i18n="settings.productReference">Step 1 — Product reference (FLUX Dev)</span>
+        <span class="settings-hint" data-i18n="settings.productReferenceHint">Text-to-image: random catalog object on white background (1:1).</span>
+        <textarea id="promptProductReference" name="PRODUCT_REFERENCE_PROMPT" rows="12"></textarea>
       </label>
 
       <label class="settings-field">
-        <span class="settings-label" data-i18n="settings.legacyUnique">Legacy uniquify (SD img2img)</span>
-        <span class="settings-hint" data-i18n="settings.legacyUniqueHint">Only when UNIQUE_MODE=sd-img2img.</span>
-        <textarea id="promptLegacyUnique" name="LEGACY_UNIQUE_PROMPT" rows="3"></textarea>
+        <span class="settings-label" data-i18n="settings.turnaround">Step 2 — Turnaround sheet (FLUX Kontext)</span>
+        <span class="settings-hint" data-i18n="settings.turnaroundHint">Single API call (~$0.025). Five views in one 16:9 row from the reference.</span>
+        <textarea id="promptTurnaround" name="TURNAROUND_PROMPT" rows="12"></textarea>
       </label>
 
-      <label class="settings-field">
-        <span class="settings-label" data-i18n="settings.legacyPixar">Legacy 3D (SD img2img)</span>
-        <span class="settings-hint" data-i18n="settings.legacyPixarHint">Only when THREED_MODEL=sd-img2img.</span>
-        <textarea id="promptLegacyPixar" name="LEGACY_PIXAR_PROMPT" rows="3"></textarea>
-      </label>
-
-      <label class="settings-field">
-        <span class="settings-label" data-i18n="settings.negative">Negative prompt (legacy img2img)</span>
-        <textarea id="promptNegative" name="NEGATIVE_PROMPT" rows="2"></textarea>
-      </label>
-
-      <p class="settings-note" data-i18n="settings.fluxReduxNote">flux-redux uniquify uses image input only — no text prompt.</p>
+      <details class="settings-legacy">
+        <summary data-i18n="settings.legacyTitle">Legacy prompts</summary>
+        <label class="settings-field">
+          <span class="settings-label" data-i18n="settings.kontext3d">3D Pixar (FLUX Kontext)</span>
+          <textarea id="promptKontext3d" name="KONTEXT_3D_PROMPT" rows="4"></textarea>
+        </label>
+        <label class="settings-field">
+          <span class="settings-label" data-i18n="settings.legacyUnique">Legacy uniquify (SD img2img)</span>
+          <textarea id="promptLegacyUnique" name="LEGACY_UNIQUE_PROMPT" rows="2"></textarea>
+        </label>
+        <label class="settings-field">
+          <span class="settings-label" data-i18n="settings.legacyPixar">Legacy 3D (SD img2img)</span>
+          <textarea id="promptLegacyPixar" name="LEGACY_PIXAR_PROMPT" rows="2"></textarea>
+        </label>
+        <label class="settings-field">
+          <span class="settings-label" data-i18n="settings.negative">Negative prompt (legacy img2img)</span>
+          <textarea id="promptNegative" name="NEGATIVE_PROMPT" rows="2"></textarea>
+        </label>
+      </details>
 
       <div class="settings-actions">
         <button class="btn btn-primary" type="submit" id="settingsSaveBtn">

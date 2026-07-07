@@ -20,13 +20,19 @@ class JobManager:
             self._jobs[job_id] = {
                 "job_id": job_id,
                 "status": "pending",
+                "phase": "reference",
                 "progress": 0,
                 "total": file_count,
+                "reference_done": 0,
+                "turnaround_done": 0,
                 "step_index": 0,
                 "results": [],
                 "files": [],
                 "created_at": time.time(),
                 "error": None,
+                "warning": None,
+                "style_ref_count": 0,
+                "catalog_order": [],
             }
         return job_id
 
@@ -41,10 +47,45 @@ class JobManager:
             if job_id in self._jobs:
                 self._jobs[job_id]["status"] = status
 
+    def set_phase(self, job_id: str, phase: str):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["phase"] = phase
+
     def set_step(self, job_id: str, step_index: int):
         with self._lock:
             if job_id in self._jobs:
                 self._jobs[job_id]["step_index"] = step_index
+
+    def set_reference_done(self, job_id: str, count: int):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["reference_done"] = count
+
+    def set_turnaround_done(self, job_id: str, count: int):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["turnaround_done"] = count
+
+    def set_warning(self, job_id: str, message: str):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["warning"] = message
+
+    def set_style_ref_count(self, job_id: str, count: int):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["style_ref_count"] = count
+
+    def set_catalog_order(self, job_id: str, catalog_order: list[int]):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["catalog_order"] = catalog_order
+
+    def increment_turnaround_done(self, job_id: str):
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["turnaround_done"] += 1
 
     def increment_progress(self, job_id: str, result: dict):
         with self._lock:
@@ -52,6 +93,17 @@ class JobManager:
             if job:
                 job["progress"] += 1
                 job["results"].append(result)
+
+    def update_result(self, job_id: str, index: int, result: dict):
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return
+            for i, existing in enumerate(job["results"]):
+                if existing.get("index") == index:
+                    job["results"][i] = {**existing, **result}
+                    return
+            job["results"].append(result)
 
     def set_error(self, job_id: str, message: str):
         with self._lock:
@@ -75,9 +127,12 @@ class JobManager:
                 return
 
             names = sorted(
-                name for name in os.listdir(job_dir)
-                if os.path.isfile(os.path.join(job_dir, name))
-                and name.lower().rsplit(".", 1)[-1] in ("jpg", "jpeg", "png")
+                (
+                    name for name in os.listdir(job_dir)
+                    if os.path.isfile(os.path.join(job_dir, name))
+                    and name.lower().endswith((".jpg", ".jpeg", ".png"))
+                ),
+                key=lambda n: int(os.path.splitext(n)[0]) if os.path.splitext(n)[0].isdigit() else n,
             )
             if names:
                 job["files"] = names
@@ -113,11 +168,15 @@ class JobManager:
         for job in jobs:
             if job["status"] == "done":
                 successful_jobs += 1
-                images_processed += job["total"]
+                images_processed += job.get("reference_done") or job["progress"]
             elif job["status"] == "error":
                 failed_jobs += 1
 
             for result in job["results"]:
+                if "hive_reference" in result:
+                    hive_scores.append(result["hive_reference"])
+                if "hive_turnaround" in result:
+                    hive_scores.append(result["hive_turnaround"])
                 if "hive_vector" in result:
                     hive_scores.append(result["hive_vector"])
                 if "hive_3d" in result:
@@ -135,6 +194,10 @@ class JobManager:
     def _summarize(self, job: dict) -> dict:
         hive_scores = []
         for result in job["results"]:
+            if "hive_reference" in result:
+                hive_scores.append(result["hive_reference"])
+            if "hive_turnaround" in result:
+                hive_scores.append(result["hive_turnaround"])
             if "hive_vector" in result:
                 hive_scores.append(result["hive_vector"])
             if "hive_3d" in result:
@@ -145,11 +208,17 @@ class JobManager:
         return {
             "job_id": job["job_id"],
             "status": job["status"],
+            "phase": job.get("phase", "reference"),
+            "phase": job.get("phase", "reference"),
             "progress": job["progress"],
             "total": job["total"],
+            "reference_done": job.get("reference_done", 0),
+            "turnaround_done": job.get("turnaround_done", 0),
             "step_index": job.get("step_index", 0),
             "created_at": job["created_at"],
             "error": job["error"],
+            "warning": job.get("warning"),
+            "style_ref_count": job.get("style_ref_count", 0),
             "avg_hive": avg_hive,
             "files": job.get("files", []),
         }

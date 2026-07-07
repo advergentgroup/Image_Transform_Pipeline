@@ -1,9 +1,13 @@
-"""Startup checks for Python version and vtracer availability."""
+"""Startup checks for Python version, vtracer, Illustrator, and local GPU turnaround."""
 import logging
 import os
 import subprocess
 import sys
 import tempfile
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,14 @@ def check_runtime() -> None:
             "Use .\\run.ps1 to create/run the Python 3.12 virtualenv."
         )
 
+    if probe_illustrator():
+        logger.info("Adobe Illustrator OK (COM automation)")
+    elif sys.platform == "win32":
+        logger.warning(
+            "Illustrator unavailable — VECTOR_MODE=illustrator will fall back to posterize. "
+            "Install Illustrator and: pip install pywin32"
+        )
+
 
 def probe_resvg_py() -> bool:
     try:
@@ -75,3 +87,14 @@ def probe_vtracer() -> bool:
         for path in (png, svg):
             if path and os.path.isfile(path):
                 os.remove(path)
+
+
+def probe_illustrator() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        from backend.services.illustrator_service import IllustratorService
+
+        return IllustratorService({}).is_available()
+    except Exception:
+        return False

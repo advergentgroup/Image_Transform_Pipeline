@@ -1,9 +1,11 @@
 from flask import Blueprint, request, jsonify, send_file, render_template, current_app
 from werkzeug.utils import secure_filename
 from backend.core.job_manager import JobManager
-from backend.core.pipeline import run_pipeline
+from backend.core.output_sizes import resolve_output_dimensions
+from backend.core.pipeline import run_pipelined_job, run_turnaround_phase
 from backend.core.settings_store import PROMPT_KEYS, load_prompts, save_prompts
-from backend.utils.validators import validate_files
+from backend.services.ai_service import AIService
+from backend.utils.validators import validate_optional_files
 from config import Config
 import threading
 import os
@@ -25,6 +27,7 @@ def _pipeline_config(app) -> dict:
     for key, value in app.config.items():
         if isinstance(key, str) and key.isupper():
             cfg[key] = value
+    cfg.update(resolve_output_dimensions(cfg))
     return cfg
 
 
@@ -48,36 +51,86 @@ def settings_page():
     return render_template("settings.html", active_page="settings")
 
 
-@api_bp.route("/api/upload", methods=["POST"])
-def upload():
-    files = request.files.getlist("images")
+@api_bp.route("/api/generate", methods=["POST"])
+def generate():
+    style_files = []
+    if request.content_type and "multipart/form-data" in request.content_type:
+        try:
+            count = int(request.form.get("count", 1))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid count"}), 400
+        style_files = [f for f in request.files.getlist("style_refs") if f.filename]
+    else:
+        data = request.get_json(silent=True) or {}
+        try:
+            count = int(data.get("count", 1))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid count"}), 400
 
-    error = validate_files(files, current_app.config)
-    if error:
-        return jsonify({"error": error}), 400
+    catalog_max = len(AIService.PRODUCT_CATALOG_PROMPTS)
+    max_count = min(current_app.config.get("MAX_FILES_PER_JOB", 100), catalog_max)
+    if count < 1 or count > max_count:
+        return jsonify({"error": f"Count must be between 1 and {max_count}"}), 400
 
-    job_id = job_manager.create_job(len(files))
+    if style_files:
+        style_cfg = {
+            **current_app.config,
+            "MAX_FILES_PER_JOB": current_app.config.get("MAX_STYLE_REFS", 10),
+        }
+        error = validate_optional_files(style_files, style_cfg)
+        if error:
+            return jsonify({"error": error}), 400
 
+    job_id = job_manager.create_job(count)
     upload_dir = os.path.join(current_app.config["UPLOAD_FOLDER"], job_id)
     os.makedirs(upload_dir, exist_ok=True)
 
-    saved_paths = []
-    for f in files:
-        path = os.path.join(upload_dir, f.filename)
-        f.save(path)
-        saved_paths.append(path)
-
-    job_manager.set_files(job_id, [os.path.basename(p) for p in saved_paths])
+    if style_files:
+        style_dir = os.path.join(upload_dir, "style_refs")
+        os.makedirs(style_dir, exist_ok=True)
+        for idx, f in enumerate(style_files, start=1):
+            ext = f.filename.rsplit(".", 1)[-1].lower()
+            if ext not in ("jpg", "jpeg", "png"):
+                continue
+            save_name = f"style_{idx:02d}.png" if ext == "png" else f"style_{idx:02d}.{ext}"
+            f.save(os.path.join(style_dir, save_name))
+        job_manager.set_style_ref_count(job_id, len(style_files))
 
     app = current_app._get_current_object()
     thread = threading.Thread(
-        target=run_pipeline,
-        args=(job_id, saved_paths, _pipeline_config(app), job_manager),
+        target=run_pipelined_job,
+        args=(job_id, _pipeline_config(app), job_manager),
     )
     thread.daemon = True
     thread.start()
 
-    return jsonify({"job_id": job_id, "file_count": len(saved_paths)})
+    return jsonify({
+        "job_id": job_id,
+        "file_count": count,
+        "mode": "generate",
+        "style_ref_count": len(style_files),
+    })
+
+
+@api_bp.route("/api/jobs/<job_id>/continue", methods=["POST"])
+def continue_job(job_id):
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "awaiting_continue":
+        return jsonify({"error": "Job is not ready for turnaround phase"}), 400
+    if job.get("reference_done", 0) < 1:
+        return jsonify({"error": "No reference images to process"}), 400
+
+    app = current_app._get_current_object()
+    thread = threading.Thread(
+        target=run_turnaround_phase,
+        args=(job_id, _pipeline_config(app), job_manager),
+    )
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({"ok": True, "job_id": job_id})
 
 
 @api_bp.route("/api/jobs")
@@ -125,7 +178,7 @@ def job_file(job_id, filename):
 @api_bp.route("/api/download/<job_id>")
 def download(job_id):
     job = job_manager.get_job(job_id)
-    if not job or job["status"] != "done":
+    if not job or job["status"] not in ("done", "awaiting_continue"):
         return jsonify({"error": "Job not ready"}), 404
 
     output_dir = current_app.config["OUTPUT_FOLDER"]

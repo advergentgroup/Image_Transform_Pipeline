@@ -1,4 +1,6 @@
 const PROMPT_FIELDS = [
+  "PRODUCT_REFERENCE_PROMPT",
+  "STYLE_GUIDED_PROMPT",
   "TURNAROUND_PROMPT",
   "KONTEXT_3D_PROMPT",
   "LEGACY_UNIQUE_PROMPT",
@@ -7,6 +9,8 @@ const PROMPT_FIELDS = [
 ];
 
 const fieldMap = {
+  PRODUCT_REFERENCE_PROMPT: "promptProductReference",
+  STYLE_GUIDED_PROMPT: "promptStyleGuided",
   TURNAROUND_PROMPT: "promptTurnaround",
   KONTEXT_3D_PROMPT: "promptKontext3d",
   LEGACY_UNIQUE_PROMPT: "promptLegacyUnique",

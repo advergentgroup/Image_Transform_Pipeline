@@ -1,0 +1,12 @@
+# GPU worker deps. Run on the rented GPU box (SimplePod PyTorch template).
+# torch/torchvision come preinstalled in the CUDA/PyTorch template — do NOT reinstall
+# them here or you may break the CUDA build. Install the rest:
+fastapi
+uvicorn[standard]
+python-multipart
+diffusers>=0.27
+transformers
+accelerate
+rembg
+onnxruntime-gpu
+pillow

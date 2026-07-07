@@ -20,3 +20,10 @@ def validate_files(files: list[FileStorage], config: dict) -> str | None:
             return f"File '{f.filename}' is not allowed. Use JPG or PNG."
 
     return None
+
+
+def validate_optional_files(files: list[FileStorage], config: dict) -> str | None:
+    """Like validate_files but allows an empty list."""
+    if not files or all(f.filename == "" for f in files):
+        return None
+    return validate_files(files, config)

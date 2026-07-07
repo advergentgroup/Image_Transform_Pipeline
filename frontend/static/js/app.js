@@ -358,8 +358,8 @@ function showJobDone(jobId, data, total) {
   activeJobBody?.classList.remove("hidden");
   activeJobHeader?.classList.remove("hidden");
 
-  updateProgressUI(total, total, 4, true);
-  Jobs.updateStepper(stepper, stepCurrentLabel, total, total, 4, true);
+  updateProgressUI(total, total, 3, true);
+  Jobs.updateStepper(stepper, stepCurrentLabel, total, total, 3, true);
 
   if (resultsGrid) {
     resultsGrid.innerHTML = Jobs.renderResultThumbs(

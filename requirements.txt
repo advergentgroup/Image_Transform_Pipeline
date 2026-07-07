@@ -8,4 +8,5 @@ requests>=2.31
 vtracer>=0.6
 resvg_py>=0.3.3
 gunicorn>=22.0
+pywin32>=306; sys_platform == "win32"
 # celery[redis]   # для фінальної версії (черга 500 фото/день)

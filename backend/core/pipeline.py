@@ -1,248 +1,305 @@
 import logging
 import os
 import shutil
+import threading
 import zipfile
 
 from backend.core.job_manager import JobManager
-from backend.services.ai_service import AIService
+from backend.utils.image_output import (
+    find_index_path,
+    image_index,
+    is_output_image,
+    output_filename,
+)
+from backend.services.ai_service import AIService, ReplicateBalanceError, ReplicateThrottleError
 from backend.services.hivedetect_service import HivedetectService
-from backend.services.image_service import ImageService
 
 logger = logging.getLogger(__name__)
 
+_REPLICATE_STOP_ERRORS = (ReplicateBalanceError, ReplicateThrottleError)
+_zip_lock = threading.Lock()
 
-def run_pipeline(job_id: str, image_paths: list, config: dict, job_manager: JobManager):
+
+def run_pipelined_job(job_id: str, config: dict, job_manager: JobManager):
+    """Reference + turnaround pipelined: turnaround #N starts in background while #N+1 ref runs."""
     job_manager.update_status(job_id, "processing")
+    job_manager.set_phase(job_id, "pipelined")
 
     ai = AIService(config)
-    img = ImageService(config)
-    hive = HivedetectService(config)
-
-    unique_mode = config.get("UNIQUE_MODE", "pillow")
-    pipeline_mode = str(config.get("PIPELINE_MODE", "turnaround")).lower()
-    target_score = float(config.get("HIVEDETECT_TARGET_SCORE", "10.0"))
-    max_retries = int(config.get("HIVEDETECT_MAX_RETRIES", "3"))
-
     output_dir = os.path.join(config["OUTPUT_FOLDER"], job_id)
-    vector_dir = os.path.join(output_dir, "vector")
-    second_dir = os.path.join(output_dir, "turnaround" if pipeline_mode == "turnaround" else "3d")
-    os.makedirs(vector_dir, exist_ok=True)
-    os.makedirs(second_dir, exist_ok=True)
+    upload_dir = os.path.join(config["UPLOAD_FOLDER"], job_id)
+    reference_dir = os.path.join(output_dir, "reference")
+    turnaround_dir = os.path.join(output_dir, "turnaround")
+    os.makedirs(reference_dir, exist_ok=True)
+    os.makedirs(turnaround_dir, exist_ok=True)
+    os.makedirs(upload_dir, exist_ok=True)
+
+    job = job_manager.get_job(job_id)
+    total = job["total"] if job else 1
+    start_index = job.get("reference_done", 0) if job else 0
+
+    preview_files = list(job.get("files", [])) if job else []
+    style_refs = _list_style_refs(upload_dir)
+    catalog_order = list(job.get("catalog_order") or [])
+    if not catalog_order:
+        catalog_order = AIService.shuffle_catalog_prompt_indices(total)
+        job_manager.set_catalog_order(job_id, catalog_order)
+
+    stopped_early = False
+    warning = None
+    turnaround_threads: list[threading.Thread] = []
 
     try:
-        for image_path in image_paths:
-            filename = os.path.basename(image_path)
-            stem = os.path.splitext(filename)[0]
+        for index in range(start_index + 1, total + 1):
+            ref_name = output_filename(index, config)
+            ref_output = os.path.join(reference_dir, ref_name)
+            preview_path = os.path.join(upload_dir, ref_name)
+            style_path = style_refs[(index - 1) % len(style_refs)] if style_refs else None
 
-            source_path = image_path
-            if unique_mode != "pillow":
-                job_manager.set_step(job_id, 0)
-                logger.info("AI uniquify (%s): %s", unique_mode, filename)
-                source_path = ai.uniquify(image_path, output_dir)
-
-            # ── Step 1: Vector ────────────────────────────────────────────
-            job_manager.set_step(job_id, 1)
-            vector_path = os.path.join(vector_dir, f"{stem}_vector.png")
-            img.vectorize_with_gradient(source_path, vector_path)
-            vector_score = hive.check(vector_path)
-            logger.info("Vector Hive: %.1f%%", vector_score)
-
-            # Vector retry — intensities 4, 6, 8 (higher than before)
-            if 0 < vector_score and vector_score > target_score:
-                vector_tmp = os.path.join(vector_dir, f".{stem}_vector_post.png")
-                for attempt in range(max_retries):
-                    if vector_score <= target_score:
-                        break
-                    intensity = min(10, 4 + attempt * 2)   # 4 → 6 → 8
-                    logger.info(
-                        "Vector retry %d/%d intensity=%d Hive=%.1f%%",
-                        attempt + 1, max_retries, intensity, vector_score,
-                    )
-                    img.apply_threed_postprocess(vector_path, vector_tmp, intensity=intensity)
-                    os.replace(vector_tmp, vector_path)
-                    vector_score = hive.check(vector_path)
-
-            # ── Step 2: Turnaround or legacy 3D ──────────────────────────
-            job_manager.set_step(job_id, 2)
-
-            if pipeline_mode == "turnaround":
-                second_path = os.path.join(second_dir, f"{stem}_turnaround.png")
-                second_score = _run_turnaround(
-                    ai, img, hive, source_path, second_path, second_dir, stem,
-                    config, target_score,
+            job_manager.set_step(job_id, 0)
+            if style_path:
+                logger.info(
+                    "Generating reference %s/%s (style: %s)",
+                    index,
+                    total,
+                    os.path.basename(style_path),
                 )
-                second_key = "turnaround_file"
-                second_file = f"{stem}_turnaround.png"
-                second_hive_key = "hive_turnaround"
             else:
-                second_path = os.path.join(second_dir, f"{stem}_3d.png")
-                second_score = _run_legacy_3d(
-                    ai, img, hive, source_path, second_path, second_dir, stem,
-                    config, target_score,
+                logger.info("Generating reference %s/%s", index, total)
+            catalog_slot = catalog_order[index - 1]
+            catalog_prompt = ai.product_reference_prompt_for_catalog_slot(catalog_slot)
+            if catalog_prompt:
+                logger.info(
+                    "Catalog prompt image %s/%s (catalog #%s): %s",
+                    index,
+                    total,
+                    catalog_slot,
+                    catalog_prompt[:80],
                 )
-                second_key = "threed_file"
-                second_file = f"{stem}_3d.png"
-                second_hive_key = "hive_3d"
+            try:
+                ai.generate_product_reference(
+                    ref_output,
+                    prompt=catalog_prompt,
+                    style_ref_path=style_path,
+                    catalog_mode=catalog_prompt is not None,
+                )
+            except _REPLICATE_STOP_ERRORS as exc:
+                stopped_early = True
+                warning = str(exc)
+                logger.warning("Replicate stop at reference %s: %s", index, exc)
+                break
 
-            # ── Step 3: Progress ──────────────────────────────────────────
-            job_manager.set_step(job_id, 3)
+            shutil.copy2(ref_output, preview_path)
+            if ref_name not in preview_files:
+                preview_files.append(ref_name)
+
             job_manager.increment_progress(job_id, {
-                "filename": filename,
-                "vector_file": f"{stem}_vector.png",
-                second_key: second_file,
-                "hive_vector": vector_score,
-                second_hive_key: second_score,
+                "index": index,
+                "filename": ref_name,
+                "reference_file": ref_name,
+                "turnaround_file": None,
             })
+            job_manager.set_reference_done(job_id, index)
+            _zip_output(reference_dir, turnaround_dir, os.path.join(output_dir, "output.zip"))
 
-            job = job_manager.get_job(job_id)
-            if job and job["progress"] >= job["total"]:
-                job_manager.set_step(job_id, 4)
+            thread = threading.Thread(
+                target=_turnaround_for_index,
+                args=(job_id, index, config, job_manager),
+                daemon=True,
+            )
+            thread.start()
+            turnaround_threads.append(thread)
 
-        job_manager.set_step(job_id, 4)
-        _zip_output(vector_dir, second_dir, os.path.join(output_dir, "output.zip"))
+            if index < total:
+                ai.wait_between_requests()
+
+        for thread in turnaround_threads:
+            thread.join()
+
+        job_manager.set_files(job_id, preview_files)
+        _zip_output(reference_dir, turnaround_dir, os.path.join(output_dir, "output.zip"))
+
+        job = job_manager.get_job(job_id) or {}
+        ref_done = job.get("reference_done", 0)
+        turn_done = job.get("turnaround_done", 0)
+
+        if ref_done == 0:
+            job_manager.set_error(
+                job_id,
+                warning or "Could not generate any references. Check Replicate balance.",
+            )
+            return
+
+        if warning:
+            job_manager.set_warning(job_id, warning)
+
+        if turn_done == 0:
+            job_manager.set_error(
+                job_id,
+                warning or "Could not generate any turnaround sheets.",
+            )
+            return
+
+        job_manager.set_step(job_id, 3)
         job_manager.update_status(job_id, "done")
 
     except Exception as e:
-        logger.exception("Pipeline failed for job %s", job_id)
-        job_manager.set_error(job_id, str(e))
+        logger.exception("Pipelined job failed for %s", job_id)
+        for thread in turnaround_threads:
+            thread.join()
+        job = job_manager.get_job(job_id) or {}
+        if (job.get("turnaround_done") or 0) > 0 or (job.get("reference_done") or 0) > 0:
+            job_manager.set_warning(job_id, str(e))
+            _zip_output(reference_dir, turnaround_dir, os.path.join(output_dir, "output.zip"))
+            job_manager.update_status(job_id, "done")
+        else:
+            job_manager.set_error(job_id, str(e))
 
 
-def _run_turnaround(
-    ai: AIService,
-    img: ImageService,
-    hive: HivedetectService,
-    source_path: str,
-    output_path: str,
-    work_dir: str,
-    stem: str,
-    config: dict,
-    target_score: float,
-) -> float:
-    """
-    5-view turnaround via FLUX Kontext (16:9).
+def run_turnaround_phase(job_id: str, config: dict, job_manager: JobManager):
+    """Legacy phase 2 — turnaround for jobs stuck at awaiting_continue."""
+    job = job_manager.get_job(job_id)
+    if not job:
+        return
+    if job["status"] not in ("awaiting_continue", "processing"):
+        return
 
-    Post-process chain (stops as soon as Hive passes):
-      1. apply_illustration_style: 16 colors + grain σ=1.0 + JPEG 93.
-         Same chain as vector — no dots, clean flat look.
-         Fast pass: works for images where FLUX generates in flat style.
+    job_manager.update_status(job_id, "processing")
+    job_manager.set_phase(job_id, "turnaround")
+    job_manager.set_step(job_id, 1)
 
-      2. depth-guided: posterize FLUX output as color base, FLUX as depth reference.
-         Same technique as depth-guided 3D — 100% algorithmic output pixels.
-         Guaranteed < 5% Hive. Adds subtle shading (appropriate for reference sheets).
+    output_dir = os.path.join(config["OUTPUT_FOLDER"], job_id)
+    reference_dir = os.path.join(output_dir, "reference")
+    turnaround_dir = os.path.join(output_dir, "turnaround")
+    os.makedirs(turnaround_dir, exist_ok=True)
 
-      3. cel-shader FS fallback (should rarely/never be needed after step 2).
-    """
-    # Prepare flat 16-color version as FLUX input (guides FLUX to flat illustration style)
-    flux_input_path = os.path.join(work_dir, f".{stem}_turnaround_input.png")
-    posterized_src = img._prepare_posterized(source_path, colors=16, dither=False)
-    posterized_src.save(flux_input_path, "PNG")
+    indices = _reference_indices(reference_dir)
+    if not indices:
+        job_manager.set_error(job_id, "No reference images found to process.")
+        return
+
+    existing_turn = sum(
+        1 for index in indices
+        if find_index_path(turnaround_dir, index, config)
+    )
+    job_manager.set_turnaround_done(job_id, existing_turn)
+
+    threads = []
+    for index in indices:
+        turn_path = os.path.join(turnaround_dir, output_filename(index, config))
+        if find_index_path(turnaround_dir, index, config):
+            continue
+        thread = threading.Thread(
+            target=_turnaround_for_index,
+            args=(job_id, index, config, job_manager),
+            daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+
+    for thread in threads:
+        thread.join()
+
+    _zip_output(reference_dir, turnaround_dir, os.path.join(output_dir, "output.zip"))
+    turnaround_count = job_manager.get_job(job_id).get("turnaround_done", 0)
+    if turnaround_count == 0:
+        job_manager.set_error(job_id, "Could not generate any turnaround sheets.")
+        return
+    job_manager.set_step(job_id, 3)
+    job_manager.update_status(job_id, "done")
+
+
+def _turnaround_for_index(job_id: str, index: int, config: dict, job_manager: JobManager):
+    output_dir = os.path.join(config["OUTPUT_FOLDER"], job_id)
+    reference_dir = os.path.join(output_dir, "reference")
+    turnaround_dir = os.path.join(output_dir, "turnaround")
+    ref_name = output_filename(index, config)
+    ref_path = find_index_path(reference_dir, index, config)
+    turn_path = os.path.join(turnaround_dir, ref_name)
+
+    if find_index_path(turnaround_dir, index, config):
+        logger.info("Turnaround already exists, skip: %s", ref_name)
+        job_manager.increment_turnaround_done(job_id)
+        return
+
+    if not ref_path:
+        logger.warning("Reference missing for turnaround #%s", index)
+        job_manager.set_warning(job_id, f"Reference #{index} not found for turnaround.")
+        return
+
+    ai = AIService(config)
+    hive = HivedetectService(config)
 
     try:
-        ai.generate_turnaround(flux_input_path, output_path)
-    finally:
-        if os.path.isfile(flux_input_path):
-            os.remove(flux_input_path)
+        job_manager.set_step(job_id, 2)
+        logger.info("Generating turnaround #%s", index)
+        ai.generate_turnaround(ref_path, turn_path)
 
-    # Keep a copy of the raw FLUX output as depth reference for step 2
-    flux_ref = os.path.join(work_dir, f".{stem}_turnaround_flux.png")
-    shutil.copy(output_path, flux_ref)
-    tmp = os.path.join(work_dir, f".{stem}_turnaround_tmp.png")
-
-    try:
-        # ── Pass 1: illustration style (vector chain) ─────────────────────
-        img.apply_illustration_style(output_path, tmp)
-        os.replace(tmp, output_path)
-        score = hive.check(output_path)
-        logger.info("Turnaround illustration-style Hive: %.1f%%", score)
-        if score < 0 or score <= target_score:
-            return score
-
-        # ── Pass 2: depth-guided (100% algorithmic pixels, same as 3D mode) ─
-        # Uses raw FLUX as depth/normal reference; derives color palette from
-        # FLUX posterized to 16 flat colors. Output pixels are 100% algorithmic
-        # — same guarantee as depth-guided 3D (<5% Hive).
-        posterized_flux = img._prepare_posterized(flux_ref, colors=16, dither=False)
-        img.render_depth_guided_3d(
-            posterized_flux,
-            flux_ref,
-            tmp,
-            strength=0.7,    # subtle shading — appropriate for reference sheets
-            light_grid=32,
-            white_background=True,
+        ref_score = hive.check(ref_path)
+        turn_score = hive.check(turn_path)
+        logger.info(
+            "Hive #%s — reference: %.1f%%, turnaround: %.1f%%",
+            index,
+            ref_score,
+            turn_score,
         )
-        os.replace(tmp, output_path)
-        score = hive.check(output_path)
-        logger.info("Turnaround depth-guided Hive: %.1f%%", score)
-        if score < 0 or score <= target_score:
-            return score
 
-        # ── Pass 3: cel-shader FS (last resort, rarely needed) ───────────
-        for colors in (12, 8):
-            img.apply_cel_shader(output_path, tmp, colors=colors, dither=True, grain_sigma=3.0)
-            os.replace(tmp, output_path)
-            score = hive.check(output_path)
-            logger.info("Turnaround cel-FS colors=%d Hive: %.1f%%", colors, score)
-            if score < 0 or score <= target_score:
-                return score
-
-    finally:
-        for p in (flux_ref, tmp):
-            if os.path.isfile(p):
-                os.remove(p)
-
-    return score
+        job_manager.update_result(job_id, index, {
+            "index": index,
+            "filename": ref_name,
+            "reference_file": ref_name,
+            "turnaround_file": ref_name,
+            "hive_reference": ref_score,
+            "hive_turnaround": turn_score,
+        })
+        job_manager.increment_turnaround_done(job_id)
+        _zip_output(reference_dir, turnaround_dir, os.path.join(output_dir, "output.zip"))
+    except _REPLICATE_STOP_ERRORS as exc:
+        logger.warning("Replicate stop at turnaround #%s: %s", index, exc)
+        job_manager.set_warning(job_id, str(exc))
+    except Exception as exc:
+        logger.exception("Turnaround failed for #%s job %s", index, job_id)
+        job_manager.set_warning(job_id, str(exc))
 
 
-def _run_legacy_3d(
-    ai: AIService,
-    img: ImageService,
-    hive: HivedetectService,
-    source_path: str,
-    output_path: str,
-    work_dir: str,
-    stem: str,
-    config: dict,
-    target_score: float,
-) -> float:
-    threed_mode = str(config.get("THREED_MODE", "kontext")).lower()
-
-    if threed_mode == "depth-guided":
-        depth_colors = int(config.get("DEPTH_GUIDED_COLORS", "48"))
-        posterized = img._prepare_posterized(source_path, colors=depth_colors, dither=False)
-        kontext_ref = os.path.join(work_dir, f".{stem}_kontext_ref.png")
-        ai.transform_3d(source_path, kontext_ref)
-        img.render_depth_guided_3d(
-            posterized,
-            kontext_ref,
-            output_path,
-            strength=float(config.get("DEPTH_GUIDED_STRENGTH", "1.5")),
-            light_grid=int(config.get("DEPTH_GUIDED_GRID", "32")),
-            white_background=str(config.get("THREED_WHITE_BACKGROUND", "0")).lower()
-            in ("1", "true", "yes"),
-        )
-        if os.path.isfile(kontext_ref):
-            os.remove(kontext_ref)
-        return hive.check(output_path)
-    else:
-        ai.transform_3d(source_path, output_path)
-        tmp = os.path.join(work_dir, f".{stem}_3d_cel.png")
-        score = 100.0
-        for cel_colors in (int(config.get("CEL_SHADER_COLORS", "24")), 16, 12):
-            img.apply_cel_shader(output_path, tmp, colors=cel_colors)
-            os.replace(tmp, output_path)
-            score = hive.check(output_path)
-            logger.info("Cel-shade colors=%d Hive: %.1f%%", cel_colors, score)
-            if score < 0 or score <= target_score:
-                break
-        return score
+def _list_style_refs(upload_dir: str) -> list[str]:
+    style_dir = os.path.join(upload_dir, "style_refs")
+    if not os.path.isdir(style_dir):
+        return []
+    names = sorted(
+        n for n in os.listdir(style_dir)
+        if n.lower().endswith((".png", ".jpg", ".jpeg")) and not n.startswith(".")
+    )
+    return [os.path.join(style_dir, n) for n in names]
 
 
-def _zip_output(first_dir: str, second_dir: str, zip_path: str):
-    folder_name = os.path.basename(second_dir)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fname in os.listdir(first_dir):
-            if not fname.startswith("."):
-                zf.write(os.path.join(first_dir, fname), arcname=f"vector/{fname}")
-        for fname in os.listdir(second_dir):
-            if not fname.startswith("."):
-                zf.write(os.path.join(second_dir, fname), arcname=f"{folder_name}/{fname}")
+def _reference_indices(reference_dir: str) -> list[int]:
+    if not os.path.isdir(reference_dir):
+        return []
+    indices = []
+    for name in os.listdir(reference_dir):
+        if name.startswith("."):
+            continue
+        idx = image_index(name)
+        if idx is not None:
+            indices.append(idx)
+    return sorted(indices)
+
+
+def _zip_output(reference_dir: str, turnaround_dir: str | None, zip_path: str):
+    with _zip_lock:
+        folders = [(reference_dir, "reference")]
+        if turnaround_dir and os.path.isdir(turnaround_dir):
+            folders.append((turnaround_dir, "turnaround"))
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for folder, prefix in folders:
+                if not os.path.isdir(folder):
+                    continue
+                names = [
+                    f for f in os.listdir(folder)
+                    if is_output_image(f)
+                ]
+                names.sort(key=lambda n: image_index(n) or n)
+                for fname in names:
+                    zf.write(os.path.join(folder, fname), arcname=f"{prefix}/{fname}")

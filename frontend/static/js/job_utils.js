@@ -14,12 +14,14 @@ window.Jobs = (() => {
   function uiStatus(status) {
     if (status === "done") return "completed";
     if (status === "error") return "error";
+    if (status === "awaiting_continue") return "review";
     return "processing";
   }
 
   function statusBadge(status) {
     if (status === "done") return { cls: "status-done", label: I18n.statusLabel("done") };
     if (status === "error") return { cls: "status-error", label: I18n.statusLabel("error") };
+    if (status === "awaiting_continue") return { cls: "status-awaiting", label: I18n.statusLabel("awaiting_continue") };
     return { cls: "status-processing", label: I18n.statusLabel("processing") };
   }
 
@@ -66,9 +68,9 @@ window.Jobs = (() => {
 
   function resultRowAvg(result) {
     const scores = [];
+    if (result.hive_reference != null && result.hive_reference >= 0) scores.push(result.hive_reference);
+    if (result.hive_turnaround != null && result.hive_turnaround >= 0) scores.push(result.hive_turnaround);
     if (result.hive_vector != null && result.hive_vector >= 0) scores.push(result.hive_vector);
-    const k2 = secondHiveKey(result);
-    if (k2 && result[k2] >= 0) scores.push(result[k2]);
     if (!scores.length) return null;
     return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
   }
@@ -94,17 +96,15 @@ window.Jobs = (() => {
   function renderQualityReport(results) {
     if (!results?.length) return "";
 
-    const hasTurnaround = results.some(r => r.hive_turnaround != null);
-    const col2Label = hasTurnaround ? I18n.t("hive.colTurnaround") : I18n.t("hive.col3d");
-
     const rows = results.map(r => {
       const avg = resultRowAvg(r);
-      const k2 = secondHiveKey(r);
       const name = r.filename || "—";
+      const refLabel = I18n.t("hive.reference");
+      const turnLabel = I18n.t("hive.turnaround");
       return `<tr>
         <td class="qr-file" title="${name}">${name}</td>
-        <td>${renderQualityCell(r.hive_vector)}</td>
-        <td>${renderQualityCell(k2 ? r[k2] : null)}</td>
+        <td>${renderQualityCell(r.hive_reference ?? r.hive_vector)}</td>
+        <td>${renderQualityCell(r.hive_turnaround)}</td>
         <td>${renderQualityCell(avg)}</td>
       </tr>`;
     }).join("");
@@ -116,8 +116,8 @@ window.Jobs = (() => {
           <thead>
             <tr>
               <th>${I18n.t("hive.colFile")}</th>
-              <th>${I18n.t("hive.colVector")}</th>
-              <th>${col2Label}</th>
+              <th>${I18n.t("hive.colReference")}</th>
+              <th>${I18n.t("hive.colTurnaround")}</th>
               <th>${I18n.t("hive.colAvg")}</th>
             </tr>
           </thead>
@@ -163,6 +163,10 @@ window.Jobs = (() => {
     }
     if (ui === "processing") {
       return `<span class="job-action-spacer" aria-hidden="true"></span>
+        <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="${I18n.t("aria.delete")}">${ICONS.delete}</button>`;
+    }
+    if (ui === "review") {
+      return `<button class="icon-btn icon-btn-sm btn-download" type="button" aria-label="${I18n.t("aria.downloadArchive")}">${ICONS.download}</button>
         <button class="icon-btn icon-btn-sm btn-delete" type="button" aria-label="${I18n.t("aria.delete")}">${ICONS.delete}</button>`;
     }
     return `<button class="icon-btn icon-btn-sm btn-download" type="button" aria-label="${I18n.t("aria.downloadArchive")}">${ICONS.download}</button>
@@ -212,19 +216,17 @@ window.Jobs = (() => {
       if (r.filename) resultByFile[r.filename] = r;
     });
 
-    const vectorLabel = I18n.t("hive.vector");
-    const hasTurnaround = (results || []).some(r => r.hive_turnaround != null);
-    const secondLabel = hasTurnaround ? I18n.t("hive.turnaround") : I18n.t("hive.threed");
+    const refLabel = I18n.t("hive.reference");
+    const turnLabel = I18n.t("hive.turnaround");
 
     const cards = pool.map(name => {
       const result = resultByFile[name];
       const done = !!result;
       const cardCls = done ? "result-card result-card-done" : "result-card result-card-pending";
-      const k2 = done ? secondHiveKey(result) : null;
       const scoresHtml = done
         ? `<div class="result-card-scores">
-            ${formatHiveScoreLine(result.hive_vector, vectorLabel)}
-            ${formatHiveScoreLine(k2 ? result[k2] : null, secondLabel)}
+            ${formatHiveScoreLine(result.hive_reference ?? result.hive_vector, refLabel)}
+            ${formatHiveScoreLine(result.hive_turnaround, turnLabel)}
           </div>`
         : `<div class="result-card-scores result-card-scores-pending">${I18n.t("hive.pending")}</div>`;
 
@@ -242,11 +244,45 @@ window.Jobs = (() => {
     return `<div class="result-cards">${cards}</div>`;
   }
 
+  function jobProgressMetrics(data) {
+    const imageTotal = data.total || 0;
+    const refDone = data.reference_done ?? data.progress ?? 0;
+    const turnDone = data.turnaround_done ?? 0;
+
+    if (data.phase === "pipelined" || (data.status === "processing" && turnDone > 0)) {
+      const combinedTotal = Math.max(imageTotal * 2, 1);
+      let stepIndex = data.step_index ?? 0;
+      if (turnDone >= imageTotal && refDone >= imageTotal) {
+        stepIndex = 3;
+      } else if (turnDone > 0 || refDone >= imageTotal) {
+        stepIndex = 2;
+      }
+      return {
+        progress: refDone + turnDone,
+        total: combinedTotal,
+        stepIndex,
+      };
+    }
+
+    if (data.phase === "turnaround") {
+      return {
+        progress: turnDone,
+        total: refDone || data.progress || imageTotal,
+        stepIndex: 2,
+      };
+    }
+    return {
+      progress: data.progress || 0,
+      total: imageTotal,
+      stepIndex: data.step_index ?? 0,
+    };
+  }
+
   function progressPct(progress, total, stepIndex = 0, isDone = false) {
     if (!total || total <= 0) return 0;
     if (isDone) return 100;
-    const unitsDone = progress * 4 + Math.min(4, Math.max(0, stepIndex));
-    return Math.min(99, Math.round(unitsDone / (total * 4) * 100));
+    const unitsDone = progress + Math.min(3, Math.max(0, stepIndex)) * (total / 3);
+    return Math.min(99, Math.round(unitsDone / (total * 4 / 3) * 100));
   }
 
   function updateStepper(stepper, stepCurrentLabel, progress, total, stepIndex, isDone = false) {
@@ -257,11 +293,11 @@ window.Jobs = (() => {
 
     let activeIdx = 0;
     if (isDone) {
-      activeIdx = 4;
+      activeIdx = 3;
     } else if (typeof stepIndex === "number") {
-      activeIdx = Math.min(4, Math.max(0, stepIndex));
-    } else if (progress > 0) {
-      activeIdx = Math.min(3, Math.floor((progress / total) * 4) + 1);
+      activeIdx = Math.min(3, Math.max(0, stepIndex));
+    } else if (progress > 0 && total > 0) {
+      activeIdx = Math.min(3, Math.floor((progress / total) * 3));
     }
 
     const stepLabel = I18n.step(activeIdx);
@@ -404,7 +440,8 @@ window.Jobs = (() => {
       const jobs = await fetchJobs();
       const active = jobs.find(j => isActive(j.status));
       if (active) {
-        updateSidebar(active.job_id, active.progress, active.total, true);
+        const metrics = jobProgressMetrics({ ...active, status: "processing" });
+        updateSidebar(active.job_id, metrics.progress, metrics.total, true, metrics.stepIndex);
       } else {
         updateSidebar(null, 0, 0, false);
       }
@@ -430,6 +467,7 @@ window.Jobs = (() => {
     renderRecentItem,
     renderResultThumbs,
     renderActions,
+    jobProgressMetrics,
     progressPct,
     updateStepper,
     updateSidebar,

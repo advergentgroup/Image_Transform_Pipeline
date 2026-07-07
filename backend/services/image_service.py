@@ -1,5 +1,5 @@
 """
-ImageService — Pillow-фільтри для унікалізації + vtracer векторизація.
+ImageService — Pillow-фільтри для унікалізації + vtracer / Illustrator векторизація.
 """
 import hashlib
 import io
@@ -7,11 +7,14 @@ import logging
 import os
 import subprocess
 import sys
+from collections import deque
 
 import numpy as np
 import resvg_py
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from scipy import ndimage
+
+from backend.utils.image_output import save_image
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,11 @@ class ImageService:
         self.vector_colors = int(config.get("VECTOR_TRACE_COLORS", _VECTOR_COLORS_DEFAULT))
         self.vector_noise = int(config.get("VECTOR_TRACE_NOISE", 4))
         self.vector_mode = config.get("VECTOR_MODE", "posterize").lower()
+        self.bg_tolerance = int(config.get("VECTOR_BG_TOLERANCE", "40"))
+        self.product_bg_tolerance = int(
+            config.get("PRODUCT_BG_TOLERANCE", config.get("VECTOR_BG_TOLERANCE", "40"))
+        )
+        self.output_max_side = int(config.get("VECTOR_OUTPUT_MAX_SIDE", "2048"))
 
     def _vtracer_script(self) -> str:
         # Smooth spline trace for clean cartoon art (Illustrator 16-color limited palette)
@@ -48,10 +56,10 @@ vtracer.convert_image_to_svg_py(
 )
 """
 
-    def apply_uniquify_filters(self, input_path: str, output_path: str):
+    def apply_uniquify_filters(self, input_path: str, output_path: str, light: bool = False):
         """
         Visible color/noise adjustments — changes fingerprint while keeping likeness.
-        Strength scales via UNIQUIFY_FILTER_STRENGTH (default 1.0).
+        light=True: minimal noise for Illustrator trace (avoids grain artifacts).
         """
         with open(input_path, "rb") as f:
             seed = int(hashlib.md5(f.read()).hexdigest()[:8], 16)
@@ -69,22 +77,56 @@ vtracer.convert_image_to_svg_py(
         img = ImageEnhance.Brightness(img).enhance(1.0 + ((seed % 5) - 2) * brightness_delta)
         img = ImageEnhance.Sharpness(img).enhance(1.0 + (seed % 6) * sharp_delta)
 
-        hsv = np.array(img.convert("HSV"))
-        hue_shift = int(((seed % 15) - 7) * 3 * strength)  # ±21° at strength 1
-        hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + hue_shift) % 256
-        sat_boost = 1.0 + ((seed % 5) - 2) * 0.03 * strength
-        hsv[:, :, 1] = np.clip(hsv[:, :, 1].astype(np.float32) * sat_boost, 0, 255).astype(np.uint8)
-        img = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
+        if not light:
+            hsv = np.array(img.convert("HSV"))
+            hue_shift = int(((seed % 15) - 7) * 3 * strength)
+            hsv[:, :, 0] = (hsv[:, :, 0].astype(np.int16) + hue_shift) % 256
+            sat_boost = 1.0 + ((seed % 5) - 2) * 0.03 * strength
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1].astype(np.float32) * sat_boost, 0, 255).astype(np.uint8)
+            img = Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB")
 
-        rng = np.random.default_rng(seed)
-        arr = np.array(img, dtype=np.float32)
-        noise_sigma = 0.4 + strength * 0.6
-        arr += rng.normal(0, noise_sigma, arr.shape)
-        arr = np.clip(arr, 0, 255).astype(np.uint8)
-        img = Image.fromarray(arr, "RGB")
+            rng = np.random.default_rng(seed)
+            arr = np.array(img, dtype=np.float32)
+            noise_sigma = 0.4 + strength * 0.6
+            arr += rng.normal(0, noise_sigma, arr.shape)
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+            img = Image.fromarray(arr, "RGB")
 
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         img.save(output_path, "PNG", optimize=True)
+
+    @staticmethod
+    def is_simple_cartoon(image_path: str, edge_threshold: float = 5.5) -> bool:
+        """Flat cartoons have few edges — flux-redux distorts them; use pillow instead."""
+        with Image.open(image_path) as img:
+            edges = np.array(img.convert("L").filter(ImageFilter.FIND_EDGES))
+        return float(edges.mean()) < edge_threshold
+
+    def is_flat_illustration(self, image_path: str) -> bool:
+        """Flat illustration on white — trace directly; flux-redux ruins shape/colors."""
+        with Image.open(image_path) as img:
+            rgb = img.convert("RGB")
+            knocked = self._knockout_edge_background(rgb)
+            arr = np.array(knocked)
+            white_ratio = float(
+                ((arr[:, :, 0] > 240) & (arr[:, :, 1] > 240) & (arr[:, :, 2] > 240)).mean()
+            )
+            lum_std = float(np.array(rgb.convert("L")).std())
+        return white_ratio >= 0.55 and lum_std < 55.0
+
+    def should_skip_flux_redux(self, image_path: str, raw_hive: float) -> tuple[bool, str]:
+        if self.is_simple_cartoon(image_path):
+            return True, "simple cartoon"
+
+        if 0 < raw_hive <= 30:
+            return True, f"Hive {raw_hive:.1f}%"
+
+        if raw_hive < 0:
+            if self.is_flat_illustration(image_path):
+                return True, "flat illustration (Hive unavailable)"
+            return False, "Hive unavailable — flux-redux for photorealistic"
+
+        return False, f"Hive {raw_hive:.1f}%"
 
     def strip_image_metadata(self, input_path: str, output_path: str):
         """Re-save without EXIF/C2PA — no visual degradation."""
@@ -92,6 +134,228 @@ vtracer.convert_image_to_svg_py(
         clean = Image.fromarray(np.array(img, dtype=np.uint8), "RGB")
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         clean.save(output_path, format="PNG", optimize=True)
+
+    def ensure_white_background(self, input_path: str, output_path: str | None = None, tolerance: int | None = None):
+        """Edge flood + contact-shadow cleanup — keeps object interior intact."""
+        img = Image.open(input_path).convert("RGB")
+        tol = tolerance if tolerance is not None else self.product_bg_tolerance
+        result = self._knockout_edge_background(img, tolerance=tol, remove_shadows=True)
+        path = output_path or input_path
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        result.save(path, "PNG", optimize=True)
+        return path
+
+    def composite_on_white_via_illustrator(self, input_path: str, output_path: str) -> str:
+        """Image Trace (ignore white) + white artboard export. Flattened 16-color look."""
+        from backend.services.illustrator_service import IllustratorService
+
+        ai = IllustratorService(self.config)
+        if not ai.is_available():
+            raise RuntimeError("Adobe Illustrator is not available for white-background export")
+
+        trace_path = output_path + ".trace.png"
+        ai.image_trace(input_path, trace_path)
+        with Image.open(trace_path) as traced:
+            canvas = Image.new("RGB", traced.size, (255, 255, 255))
+            if traced.mode == "RGBA":
+                canvas.paste(traced, mask=traced.split()[-1])
+            else:
+                canvas.paste(traced.convert("RGBA"), mask=traced.convert("RGBA").split()[-1])
+            canvas.save(output_path, "PNG", optimize=True)
+        if os.path.isfile(trace_path):
+            os.remove(trace_path)
+        return output_path
+
+    def apply_product_background(self, input_path: str, output_path: str | None = None) -> str:
+        """Post-process background per PRODUCT_BG_MODE."""
+        mode = str(self.config.get("PRODUCT_BG_MODE", "edge")).lower()
+        path = output_path or input_path
+        if mode == "none":
+            return input_path
+        if mode == "illustrator":
+            return self.composite_on_white_via_illustrator(input_path, path)
+        return self.ensure_white_background(input_path, path)
+
+    @staticmethod
+    def crop_to_content(
+        img: Image.Image,
+        padding: int = 10,
+        white_threshold: int = 250,
+    ) -> Image.Image:
+        """Tight crop around non-white pixels (no square padding).
+
+        Squaring tall/narrow subjects (e.g. a cabinet) added huge side margins, so
+        when the slot fit scaled that square down the object ended up tiny with lots
+        of empty space. A tight bbox lets compose_turnaround_sheet fill each slot.
+        """
+        rgb = img.convert("RGB")
+        arr = np.asarray(rgb, dtype=np.uint8)
+        mask = np.any(arr < white_threshold, axis=2)
+        if not mask.any():
+            return rgb
+        ys, xs = np.where(mask)
+        left = max(0, int(xs.min()) - padding)
+        top = max(0, int(ys.min()) - padding)
+        right = min(arr.shape[1], int(xs.max()) + padding + 1)
+        bottom = min(arr.shape[0], int(ys.max()) + padding + 1)
+        return rgb.crop((left, top, right, bottom))
+
+    @staticmethod
+    def chroma_key_to_white(
+        img: Image.Image,
+        key_rgb: tuple[int, int, int] = (0, 177, 64),
+        despill: bool = True,
+    ) -> Image.Image:
+        """Replace a chroma-key backdrop (default studio green) + its shadow with white.
+
+        Works far better than white-on-white: the green backdrop and the green-tinted
+        contact shadow are all clearly 'green-dominant', so they key out cleanly while
+        the colored product stays intact.
+        """
+        arr = np.array(img.convert("RGB")).astype(np.int16)
+        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+        kr, kg, kb = key_rgb
+        # Green backdrop + darker green shadow: green channel dominates both others.
+        if kg >= kr and kg >= kb:
+            bg = ((g - r) > 20) & ((g - b) > 20)
+        elif kr >= kg and kr >= kb:  # magenta/red key fallback
+            bg = ((r - g) > 20) & ((b - g) > 20)
+        else:
+            bg = ((b - r) > 20) & ((b - g) > 20)
+
+        out = arr.copy()
+        if despill:
+            # Neutralize green fringe on anti-aliased edges of kept pixels.
+            spill = (~bg) & (g > r) & (g > b) & ((g - np.maximum(r, b)) < 40)
+            fixed = np.maximum(r, b)
+            out[..., 1] = np.where(spill, fixed, out[..., 1])
+        out[bg] = 255
+        return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+    def extract_subjects(
+        self,
+        img: Image.Image,
+        count: int,
+        white_threshold: int = 248,
+        pad: int = 18,
+    ) -> list[Image.Image]:
+        """Split a multi-subject image (on white) into `count` individual crops, L→R.
+
+        Groups nearby fragments (dilation) so each product stays whole, keeps the
+        `count` largest blobs, and returns each as its own tight crop.
+        """
+        rgb = img.convert("RGB")
+        arr = np.asarray(rgb, dtype=np.uint8)
+        h, w = arr.shape[:2]
+        mask = np.any(arr < white_threshold, axis=2)
+        if not mask.any():
+            return [rgb]
+
+        merged = ndimage.binary_dilation(mask, iterations=max(1, w // 120))
+        labels, n = ndimage.label(merged)
+        if n == 0:
+            return [rgb]
+
+        blobs = []
+        for lab in range(1, n + 1):
+            ys, xs = np.where(labels == lab)
+            if xs.size < (h * w) * 0.004:  # ignore specks
+                continue
+            blobs.append((int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max()), xs.size))
+
+        if not blobs:
+            return [rgb]
+        blobs.sort(key=lambda b: b[4], reverse=True)
+        blobs = blobs[:count]
+        blobs.sort(key=lambda b: b[0])  # left to right
+
+        crops = []
+        for x0, x1, y0, y1, _ in blobs:
+            left = max(0, x0 - pad)
+            top = max(0, y0 - pad)
+            right = min(w, x1 + pad + 1)
+            bottom = min(h, y1 + pad + 1)
+            crops.append(rgb.crop((left, top, right, bottom)))
+        return crops
+
+    @staticmethod
+    def split_image_strip(img: Image.Image, count: int) -> list[Image.Image]:
+        """Split a horizontal strip into `count` equal panels."""
+        if count < 1:
+            raise ValueError("count must be >= 1")
+        w, h = img.size
+        cell_w = w // count
+        cells = []
+        for i in range(count):
+            left = i * cell_w
+            right = w if i == count - 1 else left + cell_w
+            cells.append(img.crop((left, 0, right, h)))
+        return cells
+
+    @staticmethod
+    def split_image_grid(img: Image.Image, cols: int = 3, rows: int = 2) -> list[Image.Image]:
+        """Split a composite grid into individual view cells (row-major)."""
+        w, h = img.size
+        cell_w = w // cols
+        cell_h = h // rows
+        cells = []
+        for row in range(rows):
+            for col in range(cols):
+                left = col * cell_w
+                top = row * cell_h
+                right = left + cell_w if col < cols - 1 else w
+                bottom = top + cell_h if row < rows - 1 else h
+                cells.append(img.crop((left, top, right, bottom)))
+        return cells
+
+    def compose_turnaround_sheet(
+        self,
+        view_images: list[Image.Image],
+        output_path: str,
+        canvas_size: tuple[int, int] | None = None,
+        padding: int = 16,
+        uniform_scale: bool = True,
+    ) -> str:
+        """Stitch views into one horizontal 16:9 row — equal slot size, same object scale."""
+        if not view_images:
+            raise ValueError("compose_turnaround_sheet requires at least one view")
+
+        if canvas_size is None:
+            w = int(self.config.get("TURNAROUND_SHEET_WIDTH", "1920"))
+            h = int(self.config.get("TURNAROUND_SHEET_HEIGHT", "1080"))
+            canvas_size = (w, h)
+
+        canvas_w, canvas_h = canvas_size
+        n = len(view_images)
+        inner_w = canvas_w - padding * (n + 1)
+        inner_h = canvas_h - padding * 2
+        slot_w = inner_w // n
+        slot_h = inner_h
+
+        normalized = [self.crop_to_content(v) for v in view_images]
+
+        if uniform_scale and normalized:
+            scales = [
+                min(slot_w / img.width, slot_h / img.height)
+                for img in normalized
+            ]
+            scale = min(scales)
+        else:
+            scale = 1.0
+
+        canvas = Image.new("RGB", canvas_size, (255, 255, 255))
+        for i, view in enumerate(normalized):
+            new_w = max(1, int(view.width * scale))
+            new_h = max(1, int(view.height * scale))
+            resized = view.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            slot_x = padding + i * (slot_w + padding)
+            x = slot_x + (slot_w - new_w) // 2
+            y = padding + (slot_h - new_h) // 2
+            canvas.paste(resized, (x, y))
+
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        save_image(canvas, output_path, self.config)
+        return output_path
 
     @staticmethod
     def _blur_array(arr: np.ndarray, radius: float) -> np.ndarray:
@@ -318,16 +582,24 @@ vtracer.convert_image_to_svg_py(
         return np.clip(1.0 - np.abs(lum - 128.0) / 128.0, 0.0, 1.0)
 
     def apply_illustration_style(self, input_path: str, output_path: str, colors: int = 16) -> None:
-        """Posterize to flat palette + grain σ=1.0 + JPEG quality=93.
-        Identical chain to the vector pipeline — reliably low Hive on illustration images."""
+        """Posterize + grain + JPEG on white background — Hive-safe fallback."""
         with open(input_path, "rb") as f:
             seed = int(hashlib.md5(f.read()).hexdigest()[:8], 16)
 
-        posterized = self._prepare_posterized(input_path, colors=colors, dither=False)
-        humanized = self._humanize_illustration(posterized, seed)
-        humanized = humanized.filter(ImageFilter.UnsharpMask(radius=0.6, percent=60, threshold=2))
+        img = Image.open(input_path).convert("RGB")
+        img = self._knockout_edge_background(img)
+        img = img.filter(ImageFilter.GaussianBlur(radius=0.5))
+        img = img.quantize(
+            colors=max(8, min(colors, 32)),
+            method=Image.Quantize.MEDIANCUT,
+            dither=Image.Dither.NONE,
+        ).convert("RGB")
+        humanized = self._humanize_illustration(img, seed)
+        result = self._knockout_edge_background(humanized)
+        result = result.filter(ImageFilter.UnsharpMask(radius=0.5, percent=50, threshold=2))
+        result = self._cap_image_size(result, self.output_max_side)
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        humanized.save(output_path, "PNG")
+        result.save(output_path, "PNG", optimize=True)
 
     def apply_cel_shader(
         self,
@@ -480,25 +752,193 @@ vtracer.convert_image_to_svg_py(
     def vectorize_with_gradient(self, input_path: str, output_path: str):
         """
         Illustrator 16-color look + radial gradient background.
-        posterize = clean flat fills (default for cartoons)
+        illustrator = Adobe Image Trace (Windows)
+        posterize = clean flat fills (Pillow)
         vtracer = SVG trace path
         """
-        if self.vector_mode == "vtracer":
+        if self.vector_mode == "illustrator":
+            self._vectorize_illustrator(input_path, output_path)
+        elif self.vector_mode == "vtracer":
             self._vectorize_vtracer(input_path, output_path)
         else:
             self._vectorize_posterize(input_path, output_path)
 
-    def _vectorize_posterize(self, input_path: str, output_path: str):
-        """16-color posterize + humanize + gradient."""
-        with open(input_path, "rb") as f:
-            seed = int(hashlib.md5(f.read()).hexdigest()[:8], 16)
+    @staticmethod
+    def _cap_image_size(img: Image.Image, max_side: int) -> Image.Image:
+        if max(img.width, img.height) <= max_side:
+            return img
+        scale = max_side / max(img.width, img.height)
+        return img.resize(
+            (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
 
-        posterized = self._prepare_posterized(input_path)
-        humanized = self._humanize_illustration(posterized, seed)
-        result = self._composite_on_gradient(humanized)
-        result = result.filter(ImageFilter.UnsharpMask(radius=0.6, percent=60, threshold=2))
+    def _flood_background_mask(self, arr: np.ndarray, tolerance: int) -> np.ndarray:
+        """Pixels connected to image edges with background-like color."""
+        work = arr.astype(np.int16)
+        h, w = work.shape[:2]
+        visited = np.zeros((h, w), dtype=bool)
+        if h < 2 or w < 2:
+            return visited
+
+        corners = np.array(
+            [work[0, 0], work[0, w - 1], work[h - 1, 0], work[h - 1, w - 1]],
+            dtype=np.int16,
+        )
+        bg = np.median(corners, axis=0)
+
+        def is_bg(y: int, x: int) -> bool:
+            return int(np.abs(work[y, x] - bg).max()) <= tolerance
+
+        queue: deque[tuple[int, int]] = deque()
+        for x in range(w):
+            for y in (0, h - 1):
+                if is_bg(y, x) and not visited[y, x]:
+                    visited[y, x] = True
+                    queue.append((y, x))
+        for y in range(h):
+            for x in (0, w - 1):
+                if is_bg(y, x) and not visited[y, x]:
+                    visited[y, x] = True
+                    queue.append((y, x))
+
+        while queue:
+            y, x = queue.popleft()
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and is_bg(ny, nx):
+                    visited[ny, nx] = True
+                    queue.append((ny, nx))
+        return visited
+
+    def _soft_background_mask(
+        self,
+        arr: np.ndarray,
+        visited: np.ndarray,
+        luma_floor: int = 168,
+        chroma_max: int = 42,
+    ) -> np.ndarray:
+        """Light, low-chroma pixels connected to the frame edge (soft/gradient bg + shadows).
+
+        Follows smooth background gradients, faint horizontal bands and gray contact
+        shadows, but stops at the product: colored (high-chroma) or dark (low-luma)
+        pixels are excluded, and interior light areas (rims/spokes enclosed by dark
+        tires) never touch the border, so they are preserved.
+        """
+        rgb = arr.astype(np.float32)
+        luma = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+        chroma = rgb.max(axis=2) - rgb.min(axis=2)
+
+        candidate = ((luma >= luma_floor) & (chroma <= chroma_max)) | visited
+        labels, n = ndimage.label(candidate)
+        if n == 0:
+            return visited
+
+        border = np.concatenate([
+            labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]
+        ])
+        border_ids = np.unique(border)
+        border_ids = border_ids[border_ids != 0]
+        if border_ids.size == 0:
+            return visited
+        return np.isin(labels, border_ids)
+
+    def _knockout_edge_background(
+        self, img: Image.Image, tolerance: int | None = None, remove_shadows: bool = False
+    ) -> Image.Image:
+        """Flood-fill solid background from image edges and replace with white."""
+        tol = tolerance if tolerance is not None else self.bg_tolerance
+        arr = np.array(img.convert("RGB"), dtype=np.uint8)
+        h, w = arr.shape[:2]
+        if h < 2 or w < 2:
+            return img.convert("RGB")
+
+        visited = self._flood_background_mask(arr, tol)
+        out = arr.copy()
+        out[visited] = 255
+        if remove_shadows:
+            # Pass 1 — edge-connected gray cast/contact shadows around the product.
+            mask = self._soft_background_mask(out, visited)
+            out[mask] = 255
+            # Pass 2 — flatten faint near-white bands/halos everywhere (incl. enclosed
+            # areas between spokes), without touching real detail: only very bright,
+            # near-neutral pixels are lifted, so gray spokes (darker) stay intact.
+            rgb = out.astype(np.float32)
+            luma = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+            chroma = rgb.max(axis=2) - rgb.min(axis=2)
+            near_white = (luma >= 236) & (chroma <= 18)
+            out[near_white] = 255
+        return Image.fromarray(out.astype(np.uint8), "RGB")
+
+    def _finalize_vector_for_hive(self, img: Image.Image, seed: int) -> Image.Image:
+        """Light grain + JPEG — breaks AI fingerprint, keeps Illustrator look."""
+        return self._humanize_illustration(img, seed)
+
+    def apply_vector_hive_finish(self, input_path: str, output_path: str, seed: int | None = None):
+        """Optional post-trace humanize — only use when Hive score improves."""
+        if seed is None:
+            with open(input_path, "rb") as f:
+                seed = int(hashlib.md5(f.read()).hexdigest()[:8], 16)
+        img = Image.open(input_path).convert("RGB")
+        result = self._finalize_vector_for_hive(img, seed)
+        result = self._knockout_edge_background(result)
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        result.save(output_path, "PNG")
+        result.save(output_path, "PNG", optimize=True)
+
+    def _prepare_for_illustrator(self, input_path: str, output_path: str):
+        """Knock out edge background to white — no blur, no posterize before trace."""
+        img = Image.open(input_path).convert("RGB")
+        img = self._knockout_edge_background(img)
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        img.save(output_path, "PNG", compress_level=1)
+
+    def _sharpen_traced(self, img: Image.Image) -> Image.Image:
+        """Light edge cleanup after Illustrator export."""
+        return img.filter(ImageFilter.UnsharpMask(radius=0.4, percent=60, threshold=2))
+
+    def _vectorize_illustrator(self, input_path: str, output_path: str):
+        """Adobe Image Trace: 16 colors + noise + white background."""
+        from backend.services.illustrator_service import IllustratorService
+
+        work_dir = os.path.dirname(output_path) or "."
+        token = hashlib.md5(os.path.abspath(input_path).encode("utf-8")).hexdigest()[:10]
+        prep_path = os.path.join(work_dir, f".ai_{token}_prep.png")
+        raw_png_path = os.path.join(work_dir, f".ai_{token}_raw.png")
+
+        ai = IllustratorService(self.config)
+        if not ai.is_available():
+            logger.warning(
+                "Illustrator unavailable for %s — using posterize fallback (not Image Trace)",
+                input_path,
+            )
+            self._vectorize_posterize(input_path, output_path)
+            return
+
+        try:
+            self._prepare_for_illustrator(input_path, prep_path)
+            ai.image_trace(prep_path, raw_png_path)
+
+            vec_img = Image.open(raw_png_path).convert("RGBA")
+            width, height = vec_img.size
+            bg = Image.new("RGB", (width, height), (255, 255, 255))
+            bg.paste(vec_img, mask=vec_img.split()[3])
+            result = self._knockout_edge_background(bg)
+            result = self._sharpen_traced(result)
+            result = self._cap_image_size(result, self.output_max_side)
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            result.save(output_path, "PNG", optimize=True)
+            logger.info("Illustrator trace OK: %s", os.path.basename(input_path))
+        except Exception:
+            logger.exception("Illustrator trace failed for %s — posterize fallback", input_path)
+            self._vectorize_posterize(input_path, output_path)
+        finally:
+            for path in (prep_path, raw_png_path):
+                if path and os.path.exists(path):
+                    os.remove(path)
+
+    def _vectorize_posterize(self, input_path: str, output_path: str):
+        """16-color posterize fallback on white background."""
+        self.apply_illustration_style(input_path, output_path, colors=self.vector_colors)
 
     def _vectorize_vtracer(self, input_path: str, output_path: str):
         work_dir = os.path.dirname(output_path) or "."
