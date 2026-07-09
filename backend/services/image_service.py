@@ -341,12 +341,13 @@ vtracer.convert_image_to_svg_py(
             ]
             scale = min(scales)
         else:
-            scale = 1.0
+            scale = None  # per-view scale
 
         canvas = Image.new("RGB", canvas_size, (255, 255, 255))
         for i, view in enumerate(normalized):
-            new_w = max(1, int(view.width * scale))
-            new_h = max(1, int(view.height * scale))
+            s = scale if scale is not None else min(slot_w / view.width, slot_h / view.height)
+            new_w = max(1, int(view.width * s))
+            new_h = max(1, int(view.height * s))
             resized = view.resize((new_w, new_h), Image.Resampling.LANCZOS)
             # Restore crispness lost during downscale
             resized = resized.filter(ImageFilter.UnsharpMask(radius=0.6, percent=60, threshold=2))

@@ -519,24 +519,20 @@ class AIService:
         self._finalize_output(output_path, self.turnaround_size)
         return output_path
 
-    # Per-view camera config: (rotate_degrees, vertical_tilt, move_forward)
-    # rotate_degrees: -90=left … 0=front … +90=right
-    # vertical_tilt: Replicate int in {-1,0,1} (-1=top-down, 0=eye-level, +1=low-angle)
-    # move_forward: Replicate int 0–10 (0=normal, higher=closer)
     _QWEN_VIEW_PARAMS = (
-        (-90, -1, 0),   # left side, slightly elevated
-        (-45, -1, 0),   # front-left, slightly elevated
-        (  0,  0, 0),   # front, eye-level
-        ( 45,  0, 1),   # front-right, slightly low, slightly closer
-        ( 90,  1, 2),   # right side, low angle, closer
+        (-90, 0, 0),
+        (-45, 0, 0),
+        (  0, 0, 0),
+        ( 45, 0, 0),
+        ( 90, 0, 0),
     )
 
     _QWEN_VIEW_LABELS = (
-        "VIEW 1 of 5 — LEFT SIDE: rotate the product so the camera sees only the left profile. Camera slightly above eye-level. Single product, white background.",
-        "VIEW 2 of 5 — FRONT-LEFT: camera 45 degrees to the left and slightly above. Show the front face and left side together. Single product, white background.",
-        "VIEW 3 of 5 — FRONT: camera directly in front, eye-level. Show the front face. Single product, white background.",
-        "VIEW 4 of 5 — FRONT-RIGHT: camera 45 degrees to the right and slightly below eye-level. Show the front face and right side together. Single product, white background.",
-        "VIEW 5 of 5 — RIGHT SIDE: rotate the product so the camera sees only the right profile. Camera slightly below eye-level, slightly closer. Single product, white background.",
+        "VIEW 1 of 5 — LEFT SIDE: camera 90° to the left, eye-level.",
+        "VIEW 2 of 5 — FRONT-LEFT: camera 45° to the left, eye-level.",
+        "VIEW 3 of 5 — FRONT: camera directly in front, eye-level.",
+        "VIEW 4 of 5 — FRONT-RIGHT: camera 45° to the right, eye-level.",
+        "VIEW 5 of 5 — RIGHT SIDE: camera 90° to the right, eye-level.",
     )
 
     def _run_qwen_turnaround(
@@ -605,18 +601,25 @@ class AIService:
                 if os.path.isfile(p):
                     os.remove(p)
 
-    def _run_trellis_turnaround(self, reference_path: str, output_path: str) -> None:
-        """True 360° turnaround via firtoz/trellis on Replicate.
+    _TRELLIS_CLEANUP_PROMPT = (
+        "Pure white #FFFFFF background. No floor, no shadows. "
+        "Keep the exact same product, same colors, same angle, same shape. Do not change anything about the product."
+    )
 
-        TRELLIS reconstructs a 3D Gaussian Splat from the product photo and
-        renders a 360° color video.  We extract 5 evenly-spaced frames from
-        that video (0%, 20%, 40%, 60%, 80% of duration) and stitch them into
-        the 16:9 turnaround sheet.
+    def _run_trellis_turnaround(self, reference_path: str, output_path: str) -> None:
+        """360° turnaround: TRELLIS 3D reconstruction → 5 frames → flux-kontext re-style.
+
+        Step 1 — TRELLIS builds a 3D model and renders a 360° color video.
+        Step 2 — Extract 5 evenly-spaced frames (front, sides, back, diagonals).
+        Step 3 — Each frame is re-drawn via flux-kontext into flat illustration style.
+        Step 4 — Stitch 5 styled frames into the 16:9 turnaround sheet.
         """
         import urllib.request
+        import numpy as np
         import av as pyav
         from backend.services.image_service import ImageService
 
+        # Step 1: TRELLIS → 360° video
         with open(reference_path, "rb") as fh:
             result = self._run_replicate(
                 self._resolve_model("firtoz/trellis"),
@@ -631,22 +634,23 @@ class AIService:
                 },
             )
 
-        if isinstance(result, dict):
-            color_video_url = result.get("color_video")
-        else:
-            color_video_url = getattr(result, "color_video", None)
+        color_video_url = (
+            result.get("color_video") if isinstance(result, dict)
+            else getattr(result, "color_video", None)
+        )
         if not color_video_url:
             raise RuntimeError(f"TRELLIS returned no color_video. result={result!r}")
-
-        # Replicate may return FileOutput objects; normalize to a plain URL string.
-        if not isinstance(color_video_url, (str, bytes)):
+        if not isinstance(color_video_url, str):
             color_video_url = getattr(color_video_url, "url", None) or str(color_video_url)
 
         work_dir = os.path.dirname(output_path) or "."
         video_path = os.path.join(work_dir, f".trellis_{os.getpid()}.mp4")
+        tmp_frame_paths: list[str] = []
+
         try:
             urllib.request.urlretrieve(color_video_url, video_path)
 
+            # Step 2: extract 5 evenly-spaced frames
             container = pyav.open(video_path)
             stream = container.streams.video[0]
             frames_list = list(container.decode(stream))
@@ -660,16 +664,34 @@ class AIService:
             indices = [int(i * total_frames / n_views) for i in range(n_views)]
 
             svc = ImageService(self.config)
-            views: list[Image.Image] = []
-            for idx in indices:
-                frame = frames_list[min(idx, total_frames - 1)]
+            for view_idx, frame_idx in enumerate(indices):
+                frame = frames_list[min(frame_idx, total_frames - 1)]
                 img = frame.to_image().convert("RGB")
-                img = svc._knockout_edge_background(img, tolerance=30)
-                views.append(img)
-            svc.compose_turnaround_sheet(views, output_path)
+                img = svc._knockout_edge_background(img, tolerance=40)
+                arr = np.array(img)
+                near_black = (arr[:, :, 0] < 40) & (arr[:, :, 1] < 40) & (arr[:, :, 2] < 40)
+                arr[near_black] = 255
+                img = Image.fromarray(arr)
+                fpath = os.path.join(work_dir, f".trellis_frame_{view_idx}_{os.getpid()}.png")
+                img.save(fpath, "PNG")
+                tmp_frame_paths.append(fpath)
+
+            # Step 3: compose — each view fills its slot independently (same height in row)
+            opened: list[Image.Image] = []
+            try:
+                for fpath in tmp_frame_paths:
+                    opened.append(Image.open(fpath))
+                svc.compose_turnaround_sheet(opened, output_path, uniform_scale=False)
+            finally:
+                for img in opened:
+                    img.close()
+
         finally:
             if os.path.isfile(video_path):
                 os.remove(video_path)
+            for p in tmp_frame_paths:
+                if os.path.isfile(p):
+                    os.remove(p)
 
     def _run_kontext_5views_turnaround(self, reference_path: str, output_path: str) -> None:
         """Five unique views via 5 individual flux-kontext calls, then stitched to 16:9.
