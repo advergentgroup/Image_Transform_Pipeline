@@ -348,6 +348,8 @@ vtracer.convert_image_to_svg_py(
             new_w = max(1, int(view.width * scale))
             new_h = max(1, int(view.height * scale))
             resized = view.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            # Restore crispness lost during downscale
+            resized = resized.filter(ImageFilter.UnsharpMask(radius=0.6, percent=60, threshold=2))
             slot_x = padding + i * (slot_w + padding)
             x = slot_x + (slot_w - new_w) // 2
             y = padding + (slot_h - new_h) // 2
@@ -863,10 +865,13 @@ vtracer.convert_image_to_svg_py(
             # Pass 2 — flatten faint near-white bands/halos everywhere (incl. enclosed
             # areas between spokes), without touching real detail: only very bright,
             # near-neutral pixels are lifted, so gray spokes (darker) stay intact.
+            # Threshold is intentionally conservative (243/10) to avoid eating into
+            # light-coloured product surfaces — prefer leaving a faint halo over
+            # erasing product edge detail or desaturating subtle gradients.
             rgb = out.astype(np.float32)
             luma = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
             chroma = rgb.max(axis=2) - rgb.min(axis=2)
-            near_white = (luma >= 236) & (chroma <= 18)
+            near_white = (luma >= 243) & (chroma <= 10)
             out[near_white] = 255
         return Image.fromarray(out.astype(np.uint8), "RGB")
 

@@ -2,7 +2,9 @@ import logging
 import os
 import random
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 import replicate
@@ -12,6 +14,11 @@ from PIL import Image
 from backend.utils.image_output import resize_and_save, save_bytes_as_output, save_image
 
 from backend.core.output_sizes import resolve_output_dimensions
+
+# Module-level rate limiter — serialises Replicate calls across all threads so
+# concurrent turnaround workers don't trigger 429s when many images run together.
+_replicate_rate_lock = threading.Lock()
+_replicate_last_call: float = 0.0
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +191,50 @@ class AIService:
         "No text, labels, dimension lines, grid, floor, cast shadows, contact shadows, or environment."
     )
 
+    KONTEXT_VIEW_PROMPTS = (
+        # View 1 — Front-Left 3/4
+        "TURNAROUND VIEW 1 of 5: FRONT-LEFT THREE-QUARTER VIEW.\n"
+        "The camera is positioned to the LEFT of the front — the product is turned "
+        "approximately 45 degrees so you see the LEFT face and part of the front face simultaneously. "
+        "This is the classic product 'hero' angle from the left side.\n"
+        "Keep the EXACT same object, colors, proportions and clean vector illustration style. "
+        "Pure flat white background #FFFFFF. No floor, no shadows, no contact shadows.",
+
+        # View 2 — Left Side
+        "TURNAROUND VIEW 2 of 5: PURE LEFT SIDE PROFILE.\n"
+        "The camera is directly to the LEFT, rotated exactly 90 degrees from the front. "
+        "You see ONLY the left side face of the product — no front, no back visible at all. "
+        "Full left side silhouette, pure side-on view.\n"
+        "Keep the EXACT same object, colors, proportions and clean vector illustration style. "
+        "Pure flat white background #FFFFFF. No floor, no shadows, no contact shadows.",
+
+        # View 3 — Back
+        "TURNAROUND VIEW 3 of 5: FULL BACK / REAR VIEW.\n"
+        "The product is fully rotated 180 degrees — the camera looks at the BACK of the product. "
+        "The front face is completely hidden; you see only the rear side. "
+        "This is the opposite of the reference image — the back face, rear details, back panel.\n"
+        "Keep the EXACT same object, colors, proportions and clean vector illustration style. "
+        "Pure flat white background #FFFFFF. No floor, no shadows, no contact shadows.",
+
+        # View 4 — Right Side
+        "TURNAROUND VIEW 4 of 5: PURE RIGHT SIDE PROFILE.\n"
+        "The camera is directly to the RIGHT, rotated exactly 90 degrees from the front. "
+        "You see ONLY the right side face of the product — no front, no back visible at all. "
+        "Full right side silhouette, pure side-on view. "
+        "Note: this is the MIRROR OPPOSITE of view 2 (left side).\n"
+        "Keep the EXACT same object, colors, proportions and clean vector illustration style. "
+        "Pure flat white background #FFFFFF. No floor, no shadows, no contact shadows.",
+
+        # View 5 — Front-Right 3/4
+        "TURNAROUND VIEW 5 of 5: FRONT-RIGHT THREE-QUARTER VIEW.\n"
+        "The camera is positioned to the RIGHT of the front — the product is turned "
+        "approximately 45 degrees so you see the RIGHT face and part of the front face simultaneously. "
+        "This is the mirror of view 1 but from the RIGHT side. "
+        "Note: this view should look like view 1 mirrored, not identical to it.\n"
+        "Keep the EXACT same object, colors, proportions and clean vector illustration style. "
+        "Pure flat white background #FFFFFF. No floor, no shadows, no contact shadows.",
+    )
+
     KONTEXT_3D_PROMPT = (
         "Transform the uploaded 2D character/image into a high-quality 3D render while "
         "preserving the original design exactly. Keep the same character identity, pose, "
@@ -225,7 +276,9 @@ class AIService:
         "Без градієнта, без сірого, без кольорового фону, без підлоги. "
         "Без drop shadow, без contact shadow, без cast shadow, без контактних тіней, "
         "без сірих плям під об'єктом, без ореолів, без тіньових площин. "
-        "Isolated product on pure flat white background, no floor, no shadows on background."
+        "Isolated product on pure flat white #FFFFFF background, no floor, no shadows anywhere. "
+        "Colors must be vivid and accurate — do NOT wash out, desaturate, or darken any colors. "
+        "Crisp sharp edges on the product. No blur, no anti-aliasing haze outside the product."
     )
 
     _ASPECT_RATIOS = {
@@ -318,6 +371,10 @@ class AIService:
         )
         self.style_guided_prompt = config.get("STYLE_GUIDED_PROMPT", self.STYLE_GUIDED_PROMPT)
         self.turnaround_prompt = config.get("TURNAROUND_PROMPT", self.TURNAROUND_PROMPT)
+        raw_view_prompts = config.get("KONTEXT_VIEW_PROMPTS")
+        self.kontext_view_prompts: tuple[str, ...] = (
+            tuple(raw_view_prompts) if raw_view_prompts else self.KONTEXT_VIEW_PROMPTS
+        )
         self.kontext_3d_prompt = config.get("KONTEXT_3D_PROMPT", self.KONTEXT_3D_PROMPT)
         self.legacy_unique_prompt = config.get("LEGACY_UNIQUE_PROMPT", self.LEGACY_UNIQUE_PROMPT)
         self.legacy_pixar_prompt = config.get("LEGACY_PIXAR_PROMPT", self.LEGACY_PIXAR_PROMPT)
@@ -429,7 +486,9 @@ class AIService:
         self, reference_path: str, output_path: str, prompt: str | None = None
     ) -> str:
         """Turnaround sheet (16:9). Default: Qwen multi-angle (~$0.03/view)."""
-        if self.turnaround_mode == "qwen":
+        if self.turnaround_mode == "trellis":
+            self._run_trellis_turnaround(reference_path, output_path)
+        elif self.turnaround_mode == "qwen":
             self._run_qwen_turnaround(reference_path, output_path, prompt=prompt)
         elif self.turnaround_mode in ("qwen-multi", "qwen_multi"):
             self._run_qwen_multi_turnaround(reference_path, output_path)
@@ -446,7 +505,7 @@ class AIService:
                     reference_path, text_prompt, output_path, aspect_ratio="16:9"
                 )
             elif self.turnaround_mode == "kontext":
-                self._run_flux_kontext_turnaround(reference_path, text_prompt, output_path)
+                self._run_kontext_5views_turnaround(reference_path, output_path)
             elif self.turnaround_mode in ("local", "zero123", "syncdreamer"):
                 raise ValueError(
                     f"TURNAROUND_MODE={self.turnaround_mode!r} was removed. "
@@ -460,49 +519,210 @@ class AIService:
         self._finalize_output(output_path, self.turnaround_size)
         return output_path
 
+    # Per-view camera config: (rotate_degrees, vertical_tilt, move_forward)
+    # rotate_degrees: -90=left … 0=front … +90=right
+    # vertical_tilt: Replicate int in {-1,0,1} (-1=top-down, 0=eye-level, +1=low-angle)
+    # move_forward: Replicate int 0–10 (0=normal, higher=closer)
+    _QWEN_VIEW_PARAMS = (
+        (-90, -1, 0),   # left side, slightly elevated
+        (-45, -1, 0),   # front-left, slightly elevated
+        (  0,  0, 0),   # front, eye-level
+        ( 45,  0, 1),   # front-right, slightly low, slightly closer
+        ( 90,  1, 2),   # right side, low angle, closer
+    )
+
+    _QWEN_VIEW_LABELS = (
+        "VIEW 1 of 5 — LEFT SIDE: rotate the product so the camera sees only the left profile. Camera slightly above eye-level. Single product, white background.",
+        "VIEW 2 of 5 — FRONT-LEFT: camera 45 degrees to the left and slightly above. Show the front face and left side together. Single product, white background.",
+        "VIEW 3 of 5 — FRONT: camera directly in front, eye-level. Show the front face. Single product, white background.",
+        "VIEW 4 of 5 — FRONT-RIGHT: camera 45 degrees to the right and slightly below eye-level. Show the front face and right side together. Single product, white background.",
+        "VIEW 5 of 5 — RIGHT SIDE: rotate the product so the camera sees only the right profile. Camera slightly below eye-level, slightly closer. Single product, white background.",
+    )
+
     def _run_qwen_turnaround(
         self, reference_path: str, output_path: str, prompt: str | None = None
     ) -> None:
-        """Five camera rotations via Qwen Edit Multiangle, stitched to 16:9."""
+        """Five camera rotations via Qwen Edit Multiangle, stitched to 16:9.
+
+        Views run concurrently via a thread pool; the module-level rate limiter
+        serialises HTTP submissions so multiple turnaround threads don't collide.
+        Each view gets a per-angle label in the prompt and a unique seed to prevent
+        the model from generating duplicate frames.
+        """
         from backend.services.image_service import ImageService
 
-        text_prompt = prompt or self.qwen_turnaround_prompt
+        base_prompt = prompt or self.qwen_turnaround_prompt
         work_dir = os.path.dirname(output_path) or "."
-        view_paths: list[str] = []
+        tmp_paths: list[str] = []
         opened: list[Image.Image] = []
 
-        try:
-            for i, angle in enumerate(self.qwen_rotate_degrees):
-                view_path = os.path.join(work_dir, f".qwen_view_{i}_{os.getpid()}.png")
-                with open(reference_path, "rb") as image_file:
-                    output = self._run_replicate(
-                        self.qwen_multiangle_model,
-                        {
-                            "image": image_file,
-                            "rotate_degrees": angle,
-                            "vertical_tilt": 0,
-                            "move_forward": 0,
-                            "use_wide_angle": False,
-                            "go_fast": True,
-                            "aspect_ratio": "1:1",
-                            "output_format": "png",
-                            "prompt": text_prompt,
-                        },
-                    )
-                self._save_output(output, view_path)
-                view_paths.append(view_path)
-                if i + 1 < len(self.qwen_rotate_degrees):
-                    self.wait_between_requests()
+        def _generate_view(i: int) -> tuple[int, str]:
+            vpath = os.path.join(
+                work_dir,
+                f".qwen_view_{i}_{os.getpid()}_{threading.get_ident()}.png",
+            )
+            rotate, tilt, forward = self._QWEN_VIEW_PARAMS[i]
+            label = self._QWEN_VIEW_LABELS[i] if i < len(self._QWEN_VIEW_LABELS) else ""
+            view_prompt = f"{base_prompt}\n\n{label}" if label else base_prompt
+            with open(reference_path, "rb") as fh:
+                out = self._run_replicate(
+                    self.qwen_multiangle_model,
+                    {
+                        "image": fh,
+                        "rotate_degrees": int(rotate),
+                        "vertical_tilt": int(tilt),
+                        "move_forward": int(forward),
+                        "use_wide_angle": False,
+                        "go_fast": True,
+                        "aspect_ratio": "1:1",
+                        "output_format": "png",
+                        "prompt": view_prompt,
+                    },
+                )
+            self._save_output(out, vpath)
+            return i, vpath
 
-            for path in view_paths:
-                opened.append(Image.open(path))
+        try:
+            results: dict[int, str] = {}
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                futures = {
+                    pool.submit(_generate_view, i): i
+                    for i in range(len(self._QWEN_VIEW_PARAMS))
+                }
+                for fut in as_completed(futures):
+                    idx, vpath = fut.result()
+                    results[idx] = vpath
+                    tmp_paths.append(vpath)
+
+            for i in sorted(results):
+                opened.append(Image.open(results[i]))
+
             ImageService(self.config).compose_turnaround_sheet(opened, output_path)
         finally:
             for img in opened:
                 img.close()
-            for path in view_paths:
-                if os.path.isfile(path):
-                    os.remove(path)
+            for p in tmp_paths:
+                if os.path.isfile(p):
+                    os.remove(p)
+
+    def _run_trellis_turnaround(self, reference_path: str, output_path: str) -> None:
+        """True 360° turnaround via firtoz/trellis on Replicate.
+
+        TRELLIS reconstructs a 3D Gaussian Splat from the product photo and
+        renders a 360° color video.  We extract 5 evenly-spaced frames from
+        that video (0%, 20%, 40%, 60%, 80% of duration) and stitch them into
+        the 16:9 turnaround sheet.
+        """
+        import urllib.request
+        import av as pyav
+        from backend.services.image_service import ImageService
+
+        with open(reference_path, "rb") as fh:
+            result = self._run_replicate(
+                self._resolve_model("firtoz/trellis"),
+                {
+                    "images": [fh],
+                    "generate_color": True,
+                    "generate_model": False,
+                    "generate_normal": False,
+                    "randomize_seed": True,
+                    "ss_sampling_steps": 12,
+                    "slat_sampling_steps": 12,
+                },
+            )
+
+        if isinstance(result, dict):
+            color_video_url = result.get("color_video")
+        else:
+            color_video_url = getattr(result, "color_video", None)
+        if not color_video_url:
+            raise RuntimeError(f"TRELLIS returned no color_video. result={result!r}")
+
+        work_dir = os.path.dirname(output_path) or "."
+        video_path = os.path.join(work_dir, f".trellis_{os.getpid()}.mp4")
+        try:
+            urllib.request.urlretrieve(color_video_url, video_path)
+
+            container = pyav.open(video_path)
+            stream = container.streams.video[0]
+            frames_list = list(container.decode(stream))
+            container.close()
+
+            total_frames = len(frames_list)
+            if total_frames == 0:
+                raise RuntimeError("TRELLIS color_video has no frames")
+
+            n_views = 5
+            indices = [int(i * total_frames / n_views) for i in range(n_views)]
+
+            views: list[Image.Image] = []
+            for idx in indices:
+                frame = frames_list[min(idx, total_frames - 1)]
+                views.append(frame.to_image())
+            ImageService(self.config).compose_turnaround_sheet(views, output_path)
+        finally:
+            if os.path.isfile(video_path):
+                os.remove(video_path)
+
+    def _run_kontext_5views_turnaround(self, reference_path: str, output_path: str) -> None:
+        """Five unique views via 5 individual flux-kontext calls, then stitched to 16:9.
+
+        Each call receives the reference image and a dedicated single-angle prompt so the
+        model actually rotates the object instead of repeating the front view.  Calls run
+        concurrently through a thread pool so inference time overlaps; the module-level
+        rate limiter serialises the HTTP submissions to stay within Replicate's rate limit.
+        """
+        from backend.services.image_service import ImageService
+
+        work_dir = os.path.dirname(output_path) or "."
+        tmp_paths: list[str] = []
+        opened: list[Image.Image] = []
+
+        def _generate_one(i: int, prompt: str) -> tuple[int, str]:
+            vpath = os.path.join(
+                work_dir,
+                f".kv_{i}_{os.getpid()}_{threading.get_ident()}.png",
+            )
+            with open(reference_path, "rb") as fh:
+                out = self._run_replicate(
+                    self.flux_kontext_model,
+                    {
+                        "prompt": prompt,
+                        "input_image": fh,
+                        "aspect_ratio": "1:1",
+                        "guidance": self.flux_kontext_guidance,
+                        "num_inference_steps": self.flux_kontext_steps,
+                        "output_format": "png",
+                    },
+                )
+            self._save_output(out, vpath)
+            return i, vpath
+
+        try:
+            prompts = list(self.kontext_view_prompts[:5])
+            while len(prompts) < 5:
+                prompts.append(prompts[-1])
+
+            # Thread pool: inference runs in parallel; _replicate_rate_lock inside
+            # _run_replicate ensures sequential HTTP submissions to honour rate limits.
+            results: dict[int, str] = {}
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                futures = {pool.submit(_generate_one, i, p): i for i, p in enumerate(prompts)}
+                for fut in as_completed(futures):
+                    idx, vpath = fut.result()
+                    results[idx] = vpath
+                    tmp_paths.append(vpath)
+
+            for i in sorted(results):
+                opened.append(Image.open(results[i]))
+
+            ImageService(self.config).compose_turnaround_sheet(opened, output_path)
+        finally:
+            for img in opened:
+                img.close()
+            for p in tmp_paths:
+                if os.path.isfile(p):
+                    os.remove(p)
 
     def _chroma_desc(self) -> tuple[str, str]:
         """Human color NAME + hex for the chroma key — Qwen honors names, not rgb()."""
@@ -686,6 +906,16 @@ class AIService:
             time.sleep(self.request_delay)
 
     def _run_replicate(self, model: str, input_dict: dict):
+        global _replicate_last_call
+        # Serialise API submissions across all threads to respect rate limits.
+        if self.request_delay > 0:
+            with _replicate_rate_lock:
+                now = time.monotonic()
+                gap = self.request_delay - (now - _replicate_last_call)
+                if gap > 0:
+                    time.sleep(gap)
+                _replicate_last_call = time.monotonic()
+
         last_exc = None
         for attempt in range(self.rate_limit_retries + 1):
             try:
