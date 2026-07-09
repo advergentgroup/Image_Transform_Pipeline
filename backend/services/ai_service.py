@@ -638,6 +638,10 @@ class AIService:
         if not color_video_url:
             raise RuntimeError(f"TRELLIS returned no color_video. result={result!r}")
 
+        # Replicate may return FileOutput objects; normalize to a plain URL string.
+        if not isinstance(color_video_url, (str, bytes)):
+            color_video_url = getattr(color_video_url, "url", None) or str(color_video_url)
+
         work_dir = os.path.dirname(output_path) or "."
         video_path = os.path.join(work_dir, f".trellis_{os.getpid()}.mp4")
         try:
@@ -655,11 +659,14 @@ class AIService:
             n_views = 5
             indices = [int(i * total_frames / n_views) for i in range(n_views)]
 
+            svc = ImageService(self.config)
             views: list[Image.Image] = []
             for idx in indices:
                 frame = frames_list[min(idx, total_frames - 1)]
-                views.append(frame.to_image())
-            ImageService(self.config).compose_turnaround_sheet(views, output_path)
+                img = frame.to_image().convert("RGB")
+                img = svc._knockout_edge_background(img, tolerance=30)
+                views.append(img)
+            svc.compose_turnaround_sheet(views, output_path)
         finally:
             if os.path.isfile(video_path):
                 os.remove(video_path)
