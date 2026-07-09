@@ -1,7 +1,7 @@
 import io
 import os
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 
@@ -86,4 +86,5 @@ def resize_and_save(path: str, size: tuple[int, int], config: dict | None = None
         out = img.convert("RGB")
         if needs_resize:
             out = out.resize(size, Image.Resampling.LANCZOS)
+            out = out.filter(ImageFilter.UnsharpMask(radius=0.8, percent=70, threshold=2))
         save_image(out, path, config)
