@@ -126,14 +126,8 @@ class AIService:
         "wooden ladder, front view, isolated on pure white background, centered composition, vector illustration",
         "wheelbarrow, side view, isolated on pure white background, centered composition, vector illustration",
         "watering can, side view, isolated on pure white background, centered composition, vector illustration",
-        "flower pot with green plant, front view, isolated on pure white background, centered composition, vector illustration",
-        "cactus in ceramic pot, front view, isolated on pure white background, centered composition, vector illustration",
-        "ceramic vase, front view, isolated on pure white background, centered composition, vector illustration",
         "teapot, side view, isolated on pure white background, centered composition, vector illustration",
         "coffee mug, side view, isolated on pure white background, centered composition, vector illustration",
-        "wine bottle, front view, isolated on pure white background, centered composition, vector illustration",
-        "glass bottle, front view, isolated on pure white background, centered composition, vector illustration",
-        "wooden barrel, front view, isolated on pure white background, centered composition, vector illustration",
         "treasure chest, front view, isolated on pure white background, centered composition, vector illustration",
         "suitcase, front view, isolated on pure white background, centered composition, vector illustration",
         "backpack, front view, isolated on pure white background, centered composition, vector illustration",
@@ -317,6 +311,7 @@ class AIService:
         self._flux_turnaround_lora_model = None
         self._flux_dev_model = None
         self._qwen_multiangle_model = None
+        self._trellis_model = None
 
         self.strength = config["IMG2IMG_STRENGTH"]
         self.strength_3d = config.get("IMG2IMG_3D_STRENGTH", 0.55)
@@ -432,6 +427,12 @@ class AIService:
         if self._qwen_multiangle_model is None:
             self._qwen_multiangle_model = self._resolve_model(self.qwen_multiangle_model_name)
         return self._qwen_multiangle_model
+
+    @property
+    def trellis_model(self) -> str:
+        if self._trellis_model is None:
+            self._trellis_model = self._resolve_model("firtoz/trellis")
+        return self._trellis_model
 
     @staticmethod
     def shuffle_catalog_prompt_indices(count: int) -> list[int]:
@@ -606,31 +607,40 @@ class AIService:
         "Keep the exact same product, same colors, same angle, same shape. Do not change anything about the product."
     )
 
-    def _run_trellis_turnaround(self, reference_path: str, output_path: str) -> None:
-        """360° turnaround: TRELLIS 3D reconstruction → 5 frames → flux-kontext re-style.
+    @staticmethod
+    def _stylize_trellis_frame(img: Image.Image) -> Image.Image:
+        """Bring TRELLIS renders closer to illustration style via PIL only (zero API cost)."""
+        from PIL import ImageEnhance, ImageFilter
+        img = ImageEnhance.Contrast(img).enhance(1.25)
+        img = ImageEnhance.Color(img).enhance(1.25)
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=100, threshold=3))
+        return img
 
-        Step 1 — TRELLIS builds a 3D model and renders a 360° color video.
-        Step 2 — Extract 5 evenly-spaced frames (front, sides, back, diagonals).
-        Step 3 — Each frame is re-drawn via flux-kontext into flat illustration style.
-        Step 4 — Stitch 5 styled frames into the 16:9 turnaround sheet.
+    def _run_trellis_turnaround(self, reference_path: str, output_path: str) -> None:
+        """360° turnaround via Replicate-hosted TRELLIS (no GPU worker needed).
+
+        Step 1 — TRELLIS reconstructs a 3D model and renders a 360° color video.
+        Step 2 — Download video, extract 5 evenly-spaced frames.
+        Step 3 — Remove background, stylize each frame (contrast/sharp boost).
+        Step 4 — Stitch 5 frames into the 16:9 turnaround sheet.
         """
         import urllib.request
         import numpy as np
         import av as pyav
         from backend.services.image_service import ImageService
 
-        # Step 1: TRELLIS → 360° video
+        # Step 1: TRELLIS → 360° color video (Replicate-hosted, no GPU worker needed)
         with open(reference_path, "rb") as fh:
             result = self._run_replicate(
-                self._resolve_model("firtoz/trellis"),
+                self.trellis_model,
                 {
                     "images": [fh],
                     "generate_color": True,
                     "generate_model": False,
                     "generate_normal": False,
                     "randomize_seed": True,
-                    "ss_sampling_steps": 12,
-                    "slat_sampling_steps": 12,
+                    "ss_sampling_steps": 20,
+                    "slat_sampling_steps": 20,
                 },
             )
 
@@ -650,7 +660,7 @@ class AIService:
         try:
             urllib.request.urlretrieve(color_video_url, video_path)
 
-            # Step 2: extract 5 evenly-spaced frames
+            # Step 2: extract 5 evenly-spaced frames from the 360° video
             container = pyav.open(video_path)
             stream = container.streams.video[0]
             frames_list = list(container.decode(stream))
@@ -663,20 +673,24 @@ class AIService:
             n_views = 5
             indices = [int(i * total_frames / n_views) for i in range(n_views)]
 
+            # Step 3: background removal + stylize
             svc = ImageService(self.config)
             for view_idx, frame_idx in enumerate(indices):
                 frame = frames_list[min(frame_idx, total_frames - 1)]
                 img = frame.to_image().convert("RGB")
+                # _flood_background_mask auto-detects bg color from corners (black for TRELLIS)
                 img = svc._knockout_edge_background(img, tolerance=40)
                 arr = np.array(img)
+                # Clean up any residual near-black specks not caught by flood-fill
                 near_black = (arr[:, :, 0] < 40) & (arr[:, :, 1] < 40) & (arr[:, :, 2] < 40)
                 arr[near_black] = 255
                 img = Image.fromarray(arr)
+                img = self._stylize_trellis_frame(img)
                 fpath = os.path.join(work_dir, f".trellis_frame_{view_idx}_{os.getpid()}.png")
                 img.save(fpath, "PNG")
                 tmp_frame_paths.append(fpath)
 
-            # Step 3: compose — each view fills its slot independently (same height in row)
+            # Step 4: compose — per-view scale so each product fills its slot
             opened: list[Image.Image] = []
             try:
                 for fpath in tmp_frame_paths:
@@ -765,23 +779,36 @@ class AIService:
             name = "BLUE"
         return name, hex_code
 
-    def _multiview_prompt(self, count: int) -> str:
-        """Prompt for one image containing `count` copies of the product on chroma green."""
+    # Fixed angle labels for the 5-view turnaround, left→right.
+    _MULTI_VIEW_ANGLES = [
+        "LEFT SIDE — camera 90° to the left, eye-level",
+        "FRONT-LEFT — camera 45° to the left, eye-level",
+        "FRONT — camera directly in front, eye-level",
+        "FRONT-RIGHT — camera 45° to the right, eye-level",
+        "RIGHT SIDE — camera 90° to the right, eye-level",
+    ]
+
+    def _multiview_prompt(self, angle_labels: list[str]) -> str:
+        """Prompt for one image with explicitly-named viewing angles on chroma green."""
         name, hex_code = self._chroma_desc()
+        count = len(angle_labels)
+        angles_str = "\n".join(
+            f"  Copy {i + 1}: {label}" for i, label in enumerate(angle_labels)
+        )
         return (
-            f"Show the SAME product as {count} separate copies side by side in one "
-            "horizontal row, evenly spaced with a clear empty gap between each copy, "
-            "every copy fully visible and never cropped, each at a slightly different "
-            "three-quarter / side viewing angle. Identical object, identical scale, "
-            "lighting and materials in every copy.\n\n"
+            f"Show the SAME product as exactly {count} separate copies side by side in one "
+            "horizontal row, evenly spaced with a clear gap between each copy. "
+            "Every copy must be fully visible and never cropped. "
+            "Identical object, identical scale, lighting and materials in every copy. "
+            "Each copy shows the product from a DIFFERENT camera angle as listed below — "
+            "follow the angles exactly, do NOT repeat the same angle twice:\n"
+            f"{angles_str}\n\n"
             f"Background: solid uniform chroma-key {name} ({hex_code}) filling the whole "
-            "frame, flat studio backdrop. No text, no labels, no dimension lines, no "
-            "measurements."
+            "frame, flat studio backdrop. No text, no labels, no shadows, no floor."
         )
 
     def _run_qwen_multi_turnaround(self, reference_path: str, output_path: str) -> None:
-        """Cheaper turnaround: few Qwen calls, each rendering several views on a chroma
-        backdrop, then keyed to white and stitched. E.g. split 2,3 -> 5 views in 2 calls."""
+        """Turnaround via Qwen multi-angle: 2 API calls (split 2+3), explicit camera angles."""
         from backend.services.image_service import ImageService
 
         svc = ImageService(self.config)
@@ -789,8 +816,18 @@ class AIService:
         tmp_paths: list[str] = []
         views: list[Image.Image] = []
 
+        # Distribute the 5 fixed angle labels across the configured split groups.
+        all_angles = list(self._MULTI_VIEW_ANGLES)
+        angle_groups: list[list[str]] = []
+        offset = 0
+        for count in self.qwen_multi_split:
+            angle_groups.append(all_angles[offset: offset + count])
+            offset += count
+
         try:
-            for i, count in enumerate(self.qwen_multi_split):
+            for i, (count, angle_labels) in enumerate(
+                zip(self.qwen_multi_split, angle_groups)
+            ):
                 tmp = os.path.join(work_dir, f".qmv_{i}_{os.getpid()}.png")
                 with open(reference_path, "rb") as image_file:
                     output = self._run_replicate(
@@ -804,7 +841,7 @@ class AIService:
                             "go_fast": True,
                             "aspect_ratio": "16:9",
                             "output_format": "png",
-                            "prompt": self._multiview_prompt(count),
+                            "prompt": self._multiview_prompt(angle_labels),
                         },
                     )
                 self._save_output(output, tmp)
@@ -813,8 +850,6 @@ class AIService:
                 keyed = svc.chroma_key_to_white(Image.open(tmp), self.qwen_chroma_rgb)
                 subjects = svc.extract_subjects(keyed, count)
                 if len(subjects) < count:
-                    # Backdrop wasn't the expected chroma color (Qwen ignored it) —
-                    # fall back to an even strip split so we still get `count` views.
                     subjects = svc.split_image_strip(keyed, count)
                 views.extend(subjects)
 
@@ -948,7 +983,9 @@ class AIService:
         last_exc = None
         for attempt in range(self.rate_limit_retries + 1):
             try:
-                return self._replicate_client.run(model, input=input_dict)
+                # wait=False avoids Replicate SDK's hard 60s read cap on blocking POST;
+                # polling uses REPLICATE_TIMEOUT_SECONDS from the client instead.
+                return self._replicate_client.run(model, input=input_dict, wait=False)
             except OSError as exc:
                 raise RuntimeError(f"Cannot reach Replicate API: {exc}") from exc
             except Exception as exc:
