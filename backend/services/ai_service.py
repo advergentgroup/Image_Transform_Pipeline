@@ -354,10 +354,9 @@ class AIService:
         self.qwen_turnaround_prompt = config.get(
             "QWEN_TURNAROUND_PROMPT",
             "Keep the exact same product, materials, colors and proportions as the reference. "
-            "Maintain perfect proportional consistency across all views — every dimension must align. "
-            "Render each view INDEPENDENTLY — absolutely no mirroring shortcuts between left and right sides. "
-            "Accurately depict asymmetric details on each side as they actually appear. "
-            "Solid white background #FFFFFF. No floor, no shadows, no reflections.",
+            "Solid white background #FFFFFF. No floor, no shadows, no reflections. "
+            "No text, no labels, no arrows, no dimension lines, no measurement marks, "
+            "no height indicators, no annotations of any kind.",
         )
         self.turnaround_lora_url = config.get("TURNAROUND_LORA_URL", self.TURNAROUND_LORA_URL)
         self.turnaround_lora_strength = float(config.get("TURNAROUND_LORA_STRENGTH", "1.0"))
@@ -532,100 +531,91 @@ class AIService:
     )
 
     _QWEN_VIEW_LABELS = (
-        "VIEW 1 of 5 — THREE-QUARTER LEFT: camera 45° to the left of front, eye-level. Show the front face and left side simultaneously.",
-        "VIEW 2 of 5 — LEFT SIDE PROFILE: camera exactly 90° to the left, eye-level. Pure left side silhouette only — no front or back visible. Render independently, do NOT mirror the right side.",
-        "VIEW 3 of 5 — BACK VIEW: camera directly behind the object, eye-level. Show the full rear face — opposite of the reference image.",
-        "VIEW 4 of 5 — RIGHT SIDE PROFILE: camera exactly 90° to the right, eye-level. Pure right side silhouette only — no front or back visible. Render independently, do NOT mirror the left side.",
-        "VIEW 5 of 5 — THREE-QUARTER RIGHT: camera 45° to the right of front, eye-level. Show the front face and right side simultaneously.",
+        "VIEW 1 of 5 — THREE-QUARTER LEFT: The object is rotated 45° so the LEFT face and part of the FRONT are visible together. The RIGHT face is completely hidden behind the object. This is NOT the same as view 5.",
+        "VIEW 2 of 5 — PURE LEFT SIDE: The object is rotated 90° — you see ONLY the left face in pure profile. Zero front visible, zero back visible. This is the actual left side, NOT a mirror of the right side.",
+        "VIEW 3 of 5 — BACK: The object is fully turned around — you see the REAR face only. The front (reference image face) is completely hidden. Show back panel, rear details, back surface.",
+        "VIEW 4 of 5 — PURE RIGHT SIDE: The object is rotated 90° to the right — you see ONLY the right face in pure profile. Zero front visible, zero back visible. This is the actual right side, NOT a mirror of the left side.",
+        "VIEW 5 of 5 — THREE-QUARTER RIGHT: The object is rotated 45° so the RIGHT face and part of the FRONT are visible together. The LEFT face is completely hidden behind the object. This is NOT the same as view 1.",
     )
 
     def _run_qwen_turnaround(
         self, reference_path: str, output_path: str, prompt: str | None = None
     ) -> None:
-        """Five camera rotations via Qwen Edit Multiangle, stitched to 16:9.
+        """3 unique Qwen calls → 5 views via mirroring, stitched to 16:9.
 
-        Views run concurrently via a thread pool; the module-level rate limiter
-        serialises HTTP submissions so multiple turnaround threads don't collide.
-        Each view gets a per-angle label in the prompt and a unique seed to prevent
-        the model from generating duplicate frames.
+        Calls (parallel where possible):
+          A — 3/4 Left  (-45°)  → view 1,  mirrored → view 5 (3/4 Right)
+          B — Left Side (-90°)  → view 2,  mirrored → view 4 (Right Side)
+          C — Back      (-90° from B result) → view 3
+
+        Result order: [3/4 Left, Left Side, Back, Right Side, 3/4 Right]
         """
         from backend.services.image_service import ImageService
 
         base_prompt = prompt or self.qwen_turnaround_prompt
         work_dir = os.path.dirname(output_path) or "."
         tmp_paths: list[str] = []
-        opened: list[Image.Image] = []
 
-        def _qwen_view(
-            image_path: str,
-            rotate: int,
-            tilt: int,
-            forward: int,
-            view_prompt: str,
-        ):
+        def _qwen_call(image_path: str, rotate: int, view_prompt: str):
             with open(image_path, "rb") as fh:
                 return self._run_replicate(
                     self.qwen_multiangle_model,
                     {
                         "image": fh,
-                        "rotate_degrees": int(rotate),
-                        "vertical_tilt": int(tilt),
-                        "move_forward": int(forward),
+                        "rotate_degrees": rotate,
+                        "vertical_tilt": 0,
+                        "move_forward": 0,
                         "use_wide_angle": False,
-                        "go_fast": True,
+                        "go_fast": False,
                         "aspect_ratio": "1:1",
                         "output_format": "png",
                         "prompt": view_prompt,
                     },
                 )
 
-        def _generate_view(i: int) -> tuple[int, str]:
-            vpath = os.path.join(
-                work_dir,
-                f".qwen_view_{i}_{os.getpid()}_{threading.get_ident()}.png",
-            )
-            rotate, tilt, forward = self._QWEN_VIEW_PARAMS[i]
-            label = self._QWEN_VIEW_LABELS[i] if i < len(self._QWEN_VIEW_LABELS) else ""
-            view_prompt = f"{base_prompt}\n\n{label}" if label else base_prompt
-            if i == 2:
-                # Back view: Replicate accepts rotate_degrees in [-90, 90] only.
-                mid_path = os.path.join(
-                    work_dir,
-                    f".qwen_mid_{i}_{os.getpid()}_{threading.get_ident()}.png",
-                )
-                left_label = self._QWEN_VIEW_LABELS[1]
-                left_prompt = f"{base_prompt}\n\n{left_label}"
-                try:
-                    mid_out = _qwen_view(reference_path, -90, tilt, forward, left_prompt)
-                    self._save_output(mid_out, mid_path)
-                    out = _qwen_view(mid_path, -90, tilt, forward, view_prompt)
-                finally:
-                    if os.path.isfile(mid_path):
-                        os.remove(mid_path)
-            else:
-                out = _qwen_view(reference_path, rotate, tilt, forward, view_prompt)
-            self._save_output(out, vpath)
-            return i, vpath
+        def _save_tmp(out, tag: str) -> str:
+            path = os.path.join(work_dir, f".qwen_{tag}_{os.getpid()}.png")
+            self._save_output(out, path)
+            tmp_paths.append(path)
+            return path
 
         try:
-            results: dict[int, str] = {}
-            with ThreadPoolExecutor(max_workers=5) as pool:
-                futures = {
-                    pool.submit(_generate_view, i): i
-                    for i in range(len(self._QWEN_VIEW_PARAMS))
-                }
-                for fut in as_completed(futures):
-                    idx, vpath = fut.result()
-                    results[idx] = vpath
-                    tmp_paths.append(vpath)
+            # Calls A and B run in parallel (both use reference_path as input)
+            prompt_ql = f"{base_prompt}\n\n{self._QWEN_VIEW_LABELS[0]}"
+            prompt_ls = f"{base_prompt}\n\n{self._QWEN_VIEW_LABELS[1]}"
 
-            for i in sorted(results):
-                opened.append(Image.open(results[i]))
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_ql = pool.submit(_qwen_call, reference_path, -45, prompt_ql)
+                fut_ls = pool.submit(_qwen_call, reference_path, -90, prompt_ls)
+                out_ql = fut_ql.result()
+                out_ls = fut_ls.result()
 
-            ImageService(self.config).compose_turnaround_sheet(opened, output_path)
+            ql_path = _save_tmp(out_ql, "ql")
+            ls_path = _save_tmp(out_ls, "ls")
+
+            # Call C: rotate the left-side result by -90° to reach the back
+            self.wait_between_requests()
+            prompt_back = f"{base_prompt}\n\n{self._QWEN_VIEW_LABELS[2]}"
+            out_back = _qwen_call(ls_path, -90, prompt_back)
+            back_path = _save_tmp(out_back, "back")
+
+            # Build 5 views: A, B, C, flip(B), flip(A)
+            img_ql = Image.open(ql_path).convert("RGB")
+            img_ls = Image.open(ls_path).convert("RGB")
+            img_back = Image.open(back_path).convert("RGB")
+            img_rs = img_ls.transpose(Image.FLIP_LEFT_RIGHT)
+            img_qr = img_ql.transpose(Image.FLIP_LEFT_RIGHT)
+
+            views = [img_ql, img_ls, img_back, img_rs, img_qr]
+            try:
+                ImageService(self.config).compose_turnaround_sheet(
+                    views, output_path, uniform_scale=True
+                )
+            finally:
+                for img in views:
+                    img.close()
+
         finally:
-            for img in opened:
-                img.close()
             for p in tmp_paths:
                 if os.path.isfile(p):
                     os.remove(p)
