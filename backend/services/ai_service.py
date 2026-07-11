@@ -353,8 +353,11 @@ class AIService:
         self.gpu_worker_views = int(config.get("GPU_WORKER_VIEWS", "5"))
         self.qwen_turnaround_prompt = config.get(
             "QWEN_TURNAROUND_PROMPT",
-            "Keep the exact same stylized 3D product, materials and colors. "
-            "Solid white background #FFFFFF. No floor, no shadows on background.",
+            "Keep the exact same product, materials, colors and proportions as the reference. "
+            "Maintain perfect proportional consistency across all views — every dimension must align. "
+            "Render each view INDEPENDENTLY — absolutely no mirroring shortcuts between left and right sides. "
+            "Accurately depict asymmetric details on each side as they actually appear. "
+            "Solid white background #FFFFFF. No floor, no shadows, no reflections.",
         )
         self.turnaround_lora_url = config.get("TURNAROUND_LORA_URL", self.TURNAROUND_LORA_URL)
         self.turnaround_lora_strength = float(config.get("TURNAROUND_LORA_STRENGTH", "1.0"))
@@ -521,19 +524,19 @@ class AIService:
         return output_path
 
     _QWEN_VIEW_PARAMS = (
-        (-90, 0, 0),
-        (-45, 0, 0),
-        (  0, 0, 0),
-        ( 45, 0, 0),
-        ( 90, 0, 0),
+        (-45, 0, 0),   # 3/4 Left
+        (-90, 0, 0),   # Left Side Profile
+        (-90, 0, 0),   # Back View — chained twice (API max ±90 per call)
+        ( 90, 0, 0),   # Right Side Profile
+        ( 45, 0, 0),   # 3/4 Right
     )
 
     _QWEN_VIEW_LABELS = (
-        "VIEW 1 of 5 — LEFT SIDE: camera 90° to the left, eye-level.",
-        "VIEW 2 of 5 — FRONT-LEFT: camera 45° to the left, eye-level.",
-        "VIEW 3 of 5 — FRONT: camera directly in front, eye-level.",
-        "VIEW 4 of 5 — FRONT-RIGHT: camera 45° to the right, eye-level.",
-        "VIEW 5 of 5 — RIGHT SIDE: camera 90° to the right, eye-level.",
+        "VIEW 1 of 5 — THREE-QUARTER LEFT: camera 45° to the left of front, eye-level. Show the front face and left side simultaneously.",
+        "VIEW 2 of 5 — LEFT SIDE PROFILE: camera exactly 90° to the left, eye-level. Pure left side silhouette only — no front or back visible. Render independently, do NOT mirror the right side.",
+        "VIEW 3 of 5 — BACK VIEW: camera directly behind the object, eye-level. Show the full rear face — opposite of the reference image.",
+        "VIEW 4 of 5 — RIGHT SIDE PROFILE: camera exactly 90° to the right, eye-level. Pure right side silhouette only — no front or back visible. Render independently, do NOT mirror the left side.",
+        "VIEW 5 of 5 — THREE-QUARTER RIGHT: camera 45° to the right of front, eye-level. Show the front face and right side simultaneously.",
     )
 
     def _run_qwen_turnaround(
@@ -553,16 +556,15 @@ class AIService:
         tmp_paths: list[str] = []
         opened: list[Image.Image] = []
 
-        def _generate_view(i: int) -> tuple[int, str]:
-            vpath = os.path.join(
-                work_dir,
-                f".qwen_view_{i}_{os.getpid()}_{threading.get_ident()}.png",
-            )
-            rotate, tilt, forward = self._QWEN_VIEW_PARAMS[i]
-            label = self._QWEN_VIEW_LABELS[i] if i < len(self._QWEN_VIEW_LABELS) else ""
-            view_prompt = f"{base_prompt}\n\n{label}" if label else base_prompt
-            with open(reference_path, "rb") as fh:
-                out = self._run_replicate(
+        def _qwen_view(
+            image_path: str,
+            rotate: int,
+            tilt: int,
+            forward: int,
+            view_prompt: str,
+        ):
+            with open(image_path, "rb") as fh:
+                return self._run_replicate(
                     self.qwen_multiangle_model,
                     {
                         "image": fh,
@@ -576,6 +578,32 @@ class AIService:
                         "prompt": view_prompt,
                     },
                 )
+
+        def _generate_view(i: int) -> tuple[int, str]:
+            vpath = os.path.join(
+                work_dir,
+                f".qwen_view_{i}_{os.getpid()}_{threading.get_ident()}.png",
+            )
+            rotate, tilt, forward = self._QWEN_VIEW_PARAMS[i]
+            label = self._QWEN_VIEW_LABELS[i] if i < len(self._QWEN_VIEW_LABELS) else ""
+            view_prompt = f"{base_prompt}\n\n{label}" if label else base_prompt
+            if i == 2:
+                # Back view: Replicate accepts rotate_degrees in [-90, 90] only.
+                mid_path = os.path.join(
+                    work_dir,
+                    f".qwen_mid_{i}_{os.getpid()}_{threading.get_ident()}.png",
+                )
+                left_label = self._QWEN_VIEW_LABELS[1]
+                left_prompt = f"{base_prompt}\n\n{left_label}"
+                try:
+                    mid_out = _qwen_view(reference_path, -90, tilt, forward, left_prompt)
+                    self._save_output(mid_out, mid_path)
+                    out = _qwen_view(mid_path, -90, tilt, forward, view_prompt)
+                finally:
+                    if os.path.isfile(mid_path):
+                        os.remove(mid_path)
+            else:
+                out = _qwen_view(reference_path, rotate, tilt, forward, view_prompt)
             self._save_output(out, vpath)
             return i, vpath
 
